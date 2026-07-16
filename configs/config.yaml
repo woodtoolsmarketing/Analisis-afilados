@@ -1,0 +1,108 @@
+# Configuracion del sistema de analisis de afilado.
+# Las claves son exactamente los nombres de los campos de las dataclasses de
+# src/afilado/config.py. Una clave mal escrita NO se ignora: la carga falla con
+# un error que la nombra, para que un typo no pase por un cambio de umbral.
+
+camara:
+  # Indice de la webcam (0 = la primera) o ruta a un video/carpeta para reproducir en diferido.
+  fuente: 0
+  ancho: 1280
+  alto: 720
+  fps: 30
+  # "auto" resuelve a DSHOW en Windows y a CAP_ANY en el resto.
+  backend: auto
+  # El autofoco es el enemigo de la escala: si el lente reenfoca, el tamano aparente
+  # del marcador cambia y todas las medidas en mm se corren. Dejar en false.
+  autofocus: false
+  # Valor fijo de enfoque (0..255 segun camara). null = no tocar el enfoque.
+  enfoque: null
+  # Exposicion manual. null = automatica. Con metal pulido conviene fijarla.
+  exposicion: null
+  voltear_horizontal: false
+
+aruco:
+  habilitado: true
+  diccionario: DICT_4X4_50
+  # LADO FISICO REAL del marcador impreso, en milimetros, verificado con calibre.
+  # Este numero es el patron que convierte pixeles a milimetros: si el marcador se
+  # imprimio con "ajustar a pagina" y mide 28.4 mm en vez de 30, TODAS las medidas
+  # saldran mal en el mismo porcentaje. Medir el impreso, no confiar en el PDF.
+  lado_mm: 30.0
+  # Id del marcador que se usa como referencia. null = usar el de menor id visible.
+  id_referencia: 0
+  # Coeficiente EMA sobre px_por_mm (0..1). Bajo = mas estable pero mas lento en reaccionar.
+  suavizado: 0.3
+  # Frames que se sigue extrapolando la ultima escala cuando el marcador queda tapado
+  # (una mano, la pieza). Pasado el limite, las medidas dejan de ser fiables.
+  max_frames_sin_marcador: 90
+  # Desvio relativo tolerado entre los 4 lados del marcador. Por encima, la camara no
+  # esta a 90 grados y el overlay avisa "CAMARA INCLINADA".
+  max_error_lados: 0.06
+
+roi:
+  # Region de interes en coordenadas NORMALIZADAS 0..1 respecto del frame, para que el
+  # recorte no dependa de la resolucion de la camara. Recorta la zona util de la mesa e
+  # ignora lo que pasa alrededor (manos, herramientas apoyadas, fondo).
+  # Solo se filtran las detecciones cuyo CENTRO cae dentro; el ArUco se busca igual en
+  # el frame completo, asi que el marcador puede estar fuera del ROI.
+  # Restriccion: x + w <= 1 y y + h <= 1.
+  habilitado: true
+  x: 0.15
+  y: 0.15
+  w: 0.7
+  h: 0.7
+
+detector:
+  # Ruta a los pesos entrenados. Si el archivo no existe se usa el detector geometrico
+  # de respaldo (Otsu + contornos), que permite medir y recolectar datos desde el dia 1.
+  pesos: models/afilado_best.pt
+  # "segment" (mascaras, medidas precisas) o "detect" (solo cajas).
+  tarea: segment
+  # Umbral alto a proposito: el aserrin, las manchas de aceite y los reflejos del metal
+  # pulido generan detecciones espurias de confianza media. Preferimos perder una
+  # deteccion dudosa antes que reportar un defecto inexistente.
+  confianza: 0.80
+  iou: 0.45
+  imgsz: 640
+  # "auto" = cuda:0 si hay GPU disponible, si no cpu.
+  dispositivo: auto
+  max_detecciones: 20
+
+filtros:
+  # Area minima en mm2 para aceptar una deteccion como pieza real. Un diente de widia
+  # ronda decenas de mm2; por debajo de este valor es polvo, viruta o ruido.
+  # Solo se aplica si hay escala valida del ArUco; sin escala se cae al filtro en px.
+  area_minima_mm2: 20.0
+  # Techo de area: descarta la mesa entera o una sombra grande tomada como objeto.
+  area_maxima_mm2: 100000.0
+  # Filtro de respaldo en pixeles, siempre activo (funciona aunque no se vea el marcador).
+  area_minima_px: 400
+  # Lado del kernel de la apertura morfologica. Debe ser IMPAR (necesita pixel central).
+  kernel_morfologico: 3
+  iteraciones_morfologicas: 1
+
+feedback:
+  habilitado: true
+  # Carpeta raiz del bucle de auto-entrenamiento. Se organiza por fecha, y guarda la
+  # imagen LIMPIA (sin overlay), el pre-etiquetado YOLO y el informe de lo que penso la IA.
+  directorio: data/feedback
+  guardar_json: true
+  # Copia con las cajas dibujadas, para revision humana. Va a revision/, nunca junto a
+  # la imagen limpia: el dataset debe contener solo pixeles reales de la pieza.
+  guardar_anotada: true
+  calidad_jpg: 95
+
+# Clases del modelo, en el mismo orden que el data.yaml del entrenamiento.
+clases:
+  - ok
+  - desgastado
+  - fisura
+  - astillado
+  - oxido
+
+# Subconjunto de clases que el overlay pinta en rojo (pieza a rechazar o reafilar).
+clases_defecto:
+  - desgastado
+  - fisura
+  - astillado
+  - oxido

@@ -1,0 +1,38 @@
+# Dependencias de Analisis-afilado
+#
+# VERSION DE PYTHON: 3.10 - 3.12 (recomendada: 3.12).
+# Python 3.13+ / 3.14 todavia NO tienen wheels de torch, y ultralytics depende de torch.
+# Si tu "python" es 3.13 o superior, instala Python 3.12 desde python.org y crea el venv
+# con esa version. scripts/setup.ps1 lo verifica por vos.
+#
+# ATENCION - OPENCV: opencv-contrib-python y opencv-python NO PUEDEN CONVIVIR.
+# Ambos instalan el mismo modulo "cv2" y el ultimo en instalarse pisa al otro, dejando
+# un cv2 mutilado (sintoma tipico: "module cv2 has no attribute aruco" o crashes raros).
+# Este proyecto necesita SI O SI opencv-contrib-python, porque el modulo cv2.aruco
+# --la referencia de escala de todo el sistema-- vive en contrib.
+# Si alguna dependencia te arrastro opencv-python (ultralytics suele hacerlo), corregilo con:
+#     pip uninstall -y opencv-python opencv-python-headless
+#     pip install --force-reinstall opencv-contrib-python
+# Verificacion rapida:
+#     python -c "import cv2; print(cv2.__version__); print(hasattr(cv2, 'aruco'))"
+
+opencv-contrib-python>=4.8,<5.0
+numpy>=1.24,<3.0
+pyyaml>=6.0
+ultralytics>=8.3.0
+
+# TORCH CON GPU (opcional pero MUY recomendado para entrenar)
+# ultralytics instala torch en su version CPU. En CPU, entrenar es lentisimo:
+# lo que en una GPU NVIDIA tarda un par de horas, en CPU puede tardar dias.
+# Si tenes una GPU NVIDIA (verificalo con: nvidia-smi), instala la build CUDA 12.4
+# DESPUES de instalar este requirements.txt, desde el indice propio de pytorch:
+#
+#     pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# Verificacion:
+#     python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+# Debe imprimir True y una version con sufijo "+cu124". Si imprime "+cpu", el indice
+# no se aplico: revisa que hayas usado --index-url y no un mirror interno.
+# Sin GPU NVIDIA, no instales nada: el torch CPU que ya trae ultralytics alcanza para
+# inferencia en vivo con los modelos chicos (yolo11n).

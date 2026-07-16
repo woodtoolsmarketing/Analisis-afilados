@@ -1,0 +1,62 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Cache de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Datos: imagenes, videos y datasets no van al repo.
+# El bucle de feedback genera miles de JPG por turno; git no es para eso.
+# Se ignora "data/*" y no "data/": git no entra en un directorio ignorado, y entonces
+# la excepcion !data/.gitkeep nunca se evaluaria.
+data/*
+!data/.gitkeep
+
+# Pesos de modelos: binarios de decenas de MB, versionalos aparte
+models/*.pt
+models/*.onnx
+models/*.engine
+models/*.pth
+!models/.gitkeep
+
+# Salidas de entrenamiento de ultralytics
+runs/
+wandb/
+yolo11*.pt
+yolov8*.pt
+
+# Video y capturas sueltas
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Marcadores generados (se regeneran con scripts/make_aruco.py)
+marcador*.png
+
+# Editores y sistema operativo
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
