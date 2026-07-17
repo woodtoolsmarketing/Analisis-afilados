@@ -25,16 +25,10 @@ para alimentarlo: alcanza con apretar una tecla cuando se manda una macana.
 
 ---
 
-## 2. AVISO IMPORTANTE DE COMPATIBILIDAD
+## 2. Compatibilidad
 
-> ### Usar **Python 3.12**. Python 3.14 **NO sirve**.
->
-> Las librerias de inteligencia artificial que usa el sistema (`torch` y `ultralytics`) todavia
-> no publicaron version compatible con Python 3.14. Si se instala con 3.14, la instalacion
-> falla o el programa arranca sin poder usar el modelo.
->
-> Descargar Python 3.12 desde https://www.python.org/downloads/ y, durante la instalacion,
-> tildar la casilla **"Add Python to PATH"**.
+Hace falta **Python 3.10 o superior**. Probado sobre **Python 3.14.2** (esta PC), con OpenCV
+4.13, numpy 2.5 y torch 2.13: funciona.
 
 Para verificar que version esta activa, abrir PowerShell y escribir:
 
@@ -42,7 +36,8 @@ Para verificar que version esta activa, abrir PowerShell y escribir:
 python --version
 ```
 
-Tiene que responder `Python 3.12.x`.
+Si no hay Python instalado, bajarlo de https://www.python.org/downloads/ y, durante la
+instalacion, tildar la casilla **"Add Python to PATH"**.
 
 ---
 

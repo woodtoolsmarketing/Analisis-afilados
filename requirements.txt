@@ -1,9 +1,8 @@
 # Dependencias de Analisis-afilado
 #
-# VERSION DE PYTHON: 3.10 - 3.12 (recomendada: 3.12).
-# Python 3.13+ / 3.14 todavia NO tienen wheels de torch, y ultralytics depende de torch.
-# Si tu "python" es 3.13 o superior, instala Python 3.12 desde python.org y crea el venv
-# con esa version. scripts/setup.ps1 lo verifica por vos.
+# VERSION DE PYTHON: 3.10 o superior. Verificado sobre Python 3.14.2 (2026-07-17):
+# torch 2.13 publica wheels cp314 y ultralytics 8.4 instala sin problemas.
+# scripts/setup.ps1 verifica la version por vos.
 #
 # ATENCION - OPENCV: opencv-contrib-python y opencv-python NO PUEDEN CONVIVIR.
 # Ambos instalan el mismo modulo "cv2" y el ultimo en instalarse pisa al otro, dejando
@@ -21,18 +20,27 @@ numpy>=1.24,<3.0
 pyyaml>=6.0
 ultralytics>=8.3.0
 
+# Tests. La suite de tests/ no necesita torch: verifica la matematica de medicion,
+# calibracion y filtros, que es donde una equivocacion silenciosa mostraria milimetros
+# falsos en pantalla. Correla con:  .\.venv\Scripts\python.exe -m pytest tests\ -q
+pytest>=7.0
+
 # TORCH CON GPU (opcional pero MUY recomendado para entrenar)
 # ultralytics instala torch en su version CPU. En CPU, entrenar es lentisimo:
 # lo que en una GPU NVIDIA tarda un par de horas, en CPU puede tardar dias.
-# Si tenes una GPU NVIDIA (verificalo con: nvidia-smi), instala la build CUDA 12.4
+# Si tenes una GPU NVIDIA (verificalo con: nvidia-smi), instala la build CUDA
 # DESPUES de instalar este requirements.txt, desde el indice propio de pytorch:
 #
-#     pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#     pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu126
+#
+# Verificado el 2026-07-17: para torch 2.13 los indices vigentes son cu126 y cu130.
+# NO uses cu124: ya no publica wheels y el comando falla con "No matching distribution".
+# Ante la duda usa cu126; cu130 exige un driver NVIDIA mas nuevo.
 #
 # Verificacion:
 #     python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 #
-# Debe imprimir True y una version con sufijo "+cu124". Si imprime "+cpu", el indice
+# Debe imprimir True y una version con sufijo "+cu126". Si imprime "+cpu", el indice
 # no se aplico: revisa que hayas usado --index-url y no un mirror interno.
 # Sin GPU NVIDIA, no instales nada: el torch CPU que ya trae ultralytics alcanza para
 # inferencia en vivo con los modelos chicos (yolo11n).

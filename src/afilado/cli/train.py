@@ -40,8 +40,8 @@ from ..config import ruta_absoluta
 
 _MENSAJE_SIN_ULTRALYTICS = (
     "No se pudo importar 'ultralytics'. Instalalo con: pip install ultralytics\n"
-    "Nota: torch todavia no publica wheels para Python 3.14. Si estas en 3.14, crea un entorno "
-    "virtual con Python 3.12 (py -3.12 -m venv .venv) e instala ahi las dependencias."
+    "Si el entorno virtual esta activado y aun asi falla, revisa que estes usando el python "
+    "del venv (.venv\\Scripts\\python.exe) y no el del sistema."
 )
 
 _DESTINO_PESOS = "models/afilado_best.pt"

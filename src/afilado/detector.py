@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 _MENSAJE_SIN_ULTRALYTICS = (
     "No se pudo importar 'ultralytics'. Instalalo con: pip install ultralytics\n"
-    "Nota: torch todavia no publica wheels para Python 3.14. Si estas en 3.14, crea un entorno "
-    "virtual con Python 3.12 (py -3.12 -m venv .venv) e instala ahi las dependencias."
+    "Mientras tanto el sistema sigue funcionando con el detector geometrico: podes medir "
+    "y recolectar imagenes para entrenar, solo que sin clasificar el estado de la pieza."
 )
 
 

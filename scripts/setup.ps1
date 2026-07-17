@@ -4,9 +4,9 @@
     Prepara el entorno de desarrollo de Analisis-afilado.
 
 .DESCRIPCION
-    Verifica la version de Python (exige 3.10-3.12), crea el entorno virtual .venv,
+    Verifica la version de Python (exige 3.10 o superior), crea el entorno virtual .venv,
     actualiza pip, instala requirements.txt, detecta si hay GPU NVIDIA y sugiere el
-    comando de torch+cu124 correspondiente.
+    comando de torch con CUDA correspondiente.
 
     Es idempotente: se puede correr las veces que haga falta. No borra nada sin avisar;
     si .venv ya existe lo reutiliza (para rehacerlo desde cero, usa -Recrear).
@@ -45,11 +45,11 @@ function Escribir-Aviso([string]$Texto) { Write-Host "  [!]  $Texto" -Foreground
 function Escribir-Error([string]$Texto) { Write-Host "  [X]  $Texto" -ForegroundColor Red }
 
 # --- Version de Python -------------------------------------------------------
-# torch (y por lo tanto ultralytics) solo publica wheels hasta 3.12. En 3.13+ el pip
-# install falla con "no matching distribution", que es un mensaje que no le dice nada
-# a nadie. Preferimos cortar aca con una explicacion clara.
+# Minimo 3.10 por la sintaxis de tipos que usa el paquete (X | None).
+# No hay techo de version: verificado el 2026-07-17 que torch 2.13 publica wheels cp314,
+# asi que 3.14 funciona. Si en el futuro pip no encuentra torch para una version muy
+# nueva, el aviso de mas abajo explica como salir del paso con un Python anterior.
 $VersionMinima = [Version]"3.10"
-$VersionMaximaExclusiva = [Version]"3.13"
 
 function Obtener-VersionPython([string]$Ejecutable) {
     try {
@@ -62,9 +62,17 @@ function Obtener-VersionPython([string]$Ejecutable) {
 }
 
 function Buscar-PythonCompatible {
-    # Prioriza el lanzador "py" con version explicita: es la forma fiable de agarrar
-    # un 3.12 aunque el "python" del PATH sea 3.14.
-    foreach ($etiqueta in @("3.12", "3.11", "3.10")) {
+    # Primero el "python" del PATH: si ya sirve, es el que el usuario espera usar.
+    foreach ($nombre in @("python", "python3")) {
+        $comando = Get-Command $nombre -ErrorAction SilentlyContinue
+        if ($null -eq $comando) { continue }
+        $version = Obtener-VersionPython $comando.Source
+        if ($null -ne $version -and $version -ge $VersionMinima) {
+            return $comando.Source
+        }
+    }
+    # Si el del PATH no sirve (o no hay), probamos el lanzador "py", de mas nuevo a mas viejo.
+    foreach ($etiqueta in @("3.14", "3.13", "3.12", "3.11", "3.10")) {
         try {
             $ruta = & py "-$etiqueta" -c "import sys; print(sys.executable)" 2>$null
             if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($ruta)) {
@@ -72,14 +80,6 @@ function Buscar-PythonCompatible {
             }
         } catch {
             # el lanzador py no esta instalado o no tiene esa version; seguimos probando
-        }
-    }
-    foreach ($nombre in @("python", "python3")) {
-        $comando = Get-Command $nombre -ErrorAction SilentlyContinue
-        if ($null -eq $comando) { continue }
-        $version = Obtener-VersionPython $comando.Source
-        if ($null -ne $version -and $version -ge $VersionMinima -and $version -lt $VersionMaximaExclusiva) {
-            return $comando.Source
         }
     }
     return $null
@@ -90,7 +90,7 @@ Escribir-Titulo "Verificando Python"
 if ([string]::IsNullOrWhiteSpace($Python)) {
     $Python = Buscar-PythonCompatible
     if ($null -eq $Python) {
-        Escribir-Error "No se encontro ningun Python entre 3.10 y 3.12."
+        Escribir-Error "No se encontro ningun Python $VersionMinima o superior."
         $comandoPython = Get-Command python -ErrorAction SilentlyContinue
         if ($null -ne $comandoPython) {
             $detectada = Obtener-VersionPython $comandoPython.Source
@@ -99,18 +99,13 @@ if ([string]::IsNullOrWhiteSpace($Python)) {
             }
         }
         Write-Host ""
-        Write-Host "  Python 3.13 y 3.14 NO sirven para este proyecto: PyTorch todavia no" -ForegroundColor Red
-        Write-Host "  publica wheels para esas versiones, y ultralytics depende de torch." -ForegroundColor Red
-        Write-Host "  El pip install fallaria con 'no matching distribution found for torch'." -ForegroundColor Red
-        Write-Host ""
-        Write-Host "  SOLUCION: instala Python 3.12 desde https://www.python.org/downloads/" -ForegroundColor Yellow
-        Write-Host "    1. Descarga 'Windows installer (64-bit)' de la serie 3.12.x" -ForegroundColor Yellow
+        Write-Host "  SOLUCION: instala Python desde https://www.python.org/downloads/" -ForegroundColor Yellow
+        Write-Host "    1. Descarga 'Windows installer (64-bit)'" -ForegroundColor Yellow
         Write-Host "    2. Marca 'Add python.exe to PATH' y 'py launcher' durante la instalacion" -ForegroundColor Yellow
-        Write-Host "    3. No hace falta desinstalar el Python que ya tenes: pueden convivir" -ForegroundColor Yellow
-        Write-Host "    4. Volve a correr este script (usara 3.12 automaticamente via 'py -3.12')" -ForegroundColor Yellow
+        Write-Host "    3. Volve a correr este script" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  Si ya tenes un 3.12 en una ruta rara, pasalo a mano:" -ForegroundColor Yellow
-        Write-Host "    .\scripts\setup.ps1 -Python 'C:\Python312\python.exe'" -ForegroundColor Yellow
+        Write-Host "  Si ya tenes un Python en una ruta rara, pasalo a mano:" -ForegroundColor Yellow
+        Write-Host "    .\scripts\setup.ps1 -Python 'C:\Python314\python.exe'" -ForegroundColor Yellow
         exit 1
     }
 }
@@ -130,13 +125,7 @@ if ($null -eq $VersionPython) {
     exit 1
 }
 if ($VersionPython -lt $VersionMinima) {
-    Escribir-Error "Python $VersionPython es demasiado viejo. Se requiere 3.10 o superior."
-    exit 1
-}
-if ($VersionPython -ge $VersionMaximaExclusiva) {
-    Escribir-Error "Python $VersionPython no esta soportado (maximo: 3.12)."
-    Write-Host "  PyTorch no publica wheels para 3.13+. Instala Python 3.12 desde python.org" -ForegroundColor Red
-    Write-Host "  y volve a correr el script. Ver el detalle mas arriba." -ForegroundColor Red
+    Escribir-Error "Python $VersionPython es demasiado viejo. Se requiere $VersionMinima o superior."
     exit 1
 }
 Escribir-Ok "Python $VersionPython -> $Python"
@@ -174,9 +163,9 @@ if (-not (Test-Path $PythonVenv)) {
 }
 
 $VersionVenv = Obtener-VersionPython $PythonVenv
-if ($null -ne $VersionVenv -and $VersionVenv -ge $VersionMaximaExclusiva) {
-    Escribir-Error "El .venv existente usa Python $VersionVenv, que no esta soportado."
-    Write-Host "  Rehacelo con: .\scripts\setup.ps1 -Recrear -Python 'ruta\a\python3.12.exe'" -ForegroundColor Red
+if ($null -ne $VersionVenv -and $VersionVenv -lt $VersionMinima) {
+    Escribir-Error "El .venv existente usa Python $VersionVenv, por debajo del minimo $VersionMinima."
+    Write-Host "  Rehacelo con: .\scripts\setup.ps1 -Recrear" -ForegroundColor Red
     exit 1
 }
 
@@ -215,7 +204,10 @@ if ($paquetesOpencv) {
     Write-Host "  No pueden convivir: ambos instalan 'cv2' y el ultimo pisa al otro," -ForegroundColor Yellow
     Write-Host "  dejando el sistema sin cv2.aruco (la referencia de escala). Corrigiendo..." -ForegroundColor Yellow
     & $PythonVenv -m pip uninstall -y opencv-python opencv-python-headless --quiet
-    & $PythonVenv -m pip install --force-reinstall --no-deps opencv-contrib-python --quiet
+    # El pin <5.0 va SI O SI: sin el, pip trae OpenCV 5.x y nos saltea la restriccion de
+    # requirements.txt por la puerta de atras. Las comillas tambien: sin ellas PowerShell
+    # interpreta el '>' como redireccion a un archivo.
+    & $PythonVenv -m pip install --force-reinstall --no-deps "opencv-contrib-python>=4.8,<5.0" --quiet
 }
 
 $tieneAruco = & $PythonVenv -c "import cv2; print(hasattr(cv2, 'aruco'))" 2>$null
@@ -225,7 +217,7 @@ if ($tieneAruco -match "True") {
 } else {
     Escribir-Aviso "cv2.aruco NO esta disponible. Corregilo a mano con:"
     Write-Host "    .\.venv\Scripts\python.exe -m pip uninstall -y opencv-python opencv-python-headless" -ForegroundColor Yellow
-    Write-Host "    .\.venv\Scripts\python.exe -m pip install --force-reinstall opencv-contrib-python" -ForegroundColor Yellow
+    Write-Host "    .\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps 'opencv-contrib-python>=4.8,<5.0'" -ForegroundColor Yellow
 }
 
 # --- GPU ---------------------------------------------------------------------
@@ -255,7 +247,7 @@ if ($hayGpu) {
         Write-Host "  ultralytics instala el torch CPU por defecto. Para entrenar en GPU," -ForegroundColor Yellow
         Write-Host "  reinstala la build CUDA 12.4 con este comando:" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "    .\.venv\Scripts\python.exe -m pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124" -ForegroundColor White
+        Write-Host "    .\.venv\Scripts\python.exe -m pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu126" -ForegroundColor White
         Write-Host ""
         Write-Host "  Son ~2.5 GB de descarga. Despues verifica con:" -ForegroundColor Yellow
         Write-Host "    .\.venv\Scripts\python.exe -c `"import torch; print(torch.cuda.is_available())`"" -ForegroundColor White
@@ -296,7 +288,7 @@ Write-Host "       python -m afilado.cli.train --datos data\dataset\data.yaml --
 Write-Host ""
 
 if (-not $torchConCuda -and $hayGpu) {
-    Escribir-Aviso "Recorda instalar torch+cu124 (paso indicado arriba) antes de entrenar."
+    Escribir-Aviso "Recorda instalar torch+cu126 (paso indicado arriba) antes de entrenar."
 }
 
 exit 0

@@ -46,6 +46,10 @@ def _sanear(nombre: str) -> str:
 
 def _json_por_defecto(valor: Any) -> Any:
     """Convierte tipos numpy a nativos: json.dumps revienta con np.float32/np.int64."""
+    # np.bool_ va primero: no es subclase de np.integer, y una comparacion de numpy
+    # (ej. mascara.any()) devuelve np.bool_ sin que se note hasta que falla el volcado.
+    if isinstance(valor, np.bool_):
+        return bool(valor)
     if isinstance(valor, np.integer):
         return int(valor)
     if isinstance(valor, np.floating):
