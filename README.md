@@ -250,6 +250,29 @@ Cuando se guarda algo, aparece una confirmacion en pantalla durante un segundo y
 
 ---
 
+## 5.bis Estado de la primera prueba (datos reales del taller)
+
+Ya se cargaron los dos primeros casos reales, que fijan los dos extremos del sistema:
+
+| Caso | Sierra | Clase | Ficha |
+|---|---|---|---|
+| Aprobada (ideal) | Freud LU3F 0300 (Ø250, Z96, sana) | `aprobada` (0) | [data/referencia/LU3F-0300.md](data/referencia/LU3F-0300.md) |
+| Rechazada (no afilable) | Sierra con diente faltante y oxido | `rechazada` (1) | [data/referencia/R01-no-afilable.md](data/referencia/R01-no-afilable.md) |
+
+**Esquema de clases:** binario — `aprobada` / `rechazada`. La sierra completa se juzga sana o
+descartada; todavia no se detalla *por que* se rechaza (eso es un refinamiento futuro).
+
+**Lo que se validó con estas fotos reales:**
+- El **filtro de nitidez** descartó solo las tomas movidas (de 51 fotos de la rechazada, ~35
+  borrosas fuera; de 15 de la aprobada, 9 fuera). Funciona sobre fotos de taller, no de laboratorio.
+- El **camino de entrenamiento** (`prepare_dataset dividir` → `train`) corre de punta a punta y
+  produce el `best.pt`.
+
+**Lo que todavía NO funciona (y es esperado):**
+- El modelo entrenado con estas ~10 fotos es **inservible** — en la prueba detectó 0. No es
+  cautela: **10 imagenes no alcanzan**. Por eso el `best.pt` de prueba se descartó y el sistema
+  sigue en modo geometrico (recolección) hasta juntar datos de verdad. Ver la sección 7.
+
 ## 6. EL CICLO DE APRENDIZAJE (la parte mas importante)
 
 El sistema no se entrena una vez y listo. **Es un circulo que se repite y cada vuelta lo

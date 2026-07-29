@@ -57,7 +57,9 @@ detector:
   # de respaldo (Otsu + contornos), que permite medir y recolectar datos desde el dia 1.
   pesos: models/afilado_best.pt
   # "segment" (mascaras, medidas precisas) o "detect" (solo cajas).
-  tarea: segment
+  # Para el esquema binario aprobada/rechazada a nivel de disco completo alcanza "detect":
+  # una caja por sierra, sin necesidad de contorno pixel a pixel.
+  tarea: detect
   # Umbral alto a proposito: el aserrin, las manchas de aceite y los reflejos del metal
   # pulido generan detecciones espurias de confianza media. Preferimos perder una
   # deteccion dudosa antes que reportar un defecto inexistente.
@@ -93,16 +95,13 @@ feedback:
   calidad_jpg: 95
 
 # Clases del modelo, en el mismo orden que el data.yaml del entrenamiento.
+# Esquema BINARIO (primera prueba): la sierra completa se juzga aprobada o rechazada.
+# Cuando haya mas datos se puede refinar a defectos especificos (diente_faltante, fisura,
+# oxido, desgastado, astillado) sin romper nada: basta agregar clases al final.
 clases:
-  - ok
-  - desgastado
-  - fisura
-  - astillado
-  - oxido
+  - aprobada
+  - rechazada
 
-# Subconjunto de clases que el overlay pinta en rojo (pieza a rechazar o reafilar).
+# Subconjunto de clases que el overlay pinta en rojo.
 clases_defecto:
-  - desgastado
-  - fisura
-  - astillado
-  - oxido
+  - rechazada
