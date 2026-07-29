@@ -56,7 +56,11 @@ def _construir_parser() -> argparse.ArgumentParser:
         nargs=2,
         metavar=("NOMBRE", "CARPETA"),
         required=True,
-        help="Nombre de la clase y carpeta con sus fotos. Repetir por cada clase.",
+        help=(
+            "Nombre de la clase y carpeta con sus fotos. Repetir por cada clase. Si repetis el "
+            "MISMO nombre con otra carpeta, se juntan (util para combinar tandas + coleccion "
+            "del taller data/coleccion/<clase>)."
+        ),
     )
     parser.add_argument("--salida", default="data/clasificacion", help="Carpeta de salida.")
     parser.add_argument("--val", type=float, default=0.2, help="Fraccion para validacion (0..1).")
@@ -95,28 +99,28 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         shutil.rmtree(salida)
 
-    nombres = [c[0] for c in args.clase]
-    if len(set(nombres)) != len(nombres):
-        print("ERROR: hay nombres de clase repetidos.")
-        return 2
-
-    rng = random.Random(args.semilla)
-    total_train = total_val = 0
-    print("%-14s %6s %8s %7s %7s %5s" % ("clase", "fotos", "nitidas", "unicas", "train", "val"))
+    # Agrupar carpetas por nombre de clase: un mismo nombre puede venir de varias carpetas.
+    carpetas_por_clase: dict[str, list[Path]] = {}
     for nombre, carpeta_str in args.clase:
         carpeta = Path(carpeta_str)
         if not carpeta.is_dir():
             print(f"ERROR: la carpeta de la clase '{nombre}' no existe: {carpeta}")
             return 2
+        carpetas_por_clase.setdefault(nombre, []).append(carpeta)
 
+    rng = random.Random(args.semilla)
+    total_train = total_val = 0
+    print("%-14s %6s %8s %7s %7s %5s" % ("clase", "fotos", "nitidas", "unicas", "train", "val"))
+    for nombre, carpetas in carpetas_por_clase.items():
         nitidas: list[np.ndarray] = []
         total = 0
-        for f in _fotos(carpeta):
-            total += 1
-            im = cv2.imread(str(f))
-            if im is None or _nitidez(im) < args.nitidez_minima:
-                continue
-            nitidas.append(im)
+        for carpeta in carpetas:
+            for f in _fotos(carpeta):
+                total += 1
+                im = cv2.imread(str(f))
+                if im is None or _nitidez(im) < args.nitidez_minima:
+                    continue
+                nitidas.append(im)
 
         # Deduplicar contra las ya aceptadas
         unicas: list[np.ndarray] = []
@@ -155,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nDataset en: {salida}")
     print(f"TOTAL train={total_train}  val={total_val}")
     print(f"Entrenar con: python -m afilado.cli.train --datos {salida} --epocas 100")
-    if total_val < len(nombres) * 5:
+    if total_val < len(carpetas_por_clase) * 5:
         print("AVISO: hay muy pocas fotos. Para un modelo que sirva de verdad se necesitan\n"
               "       cientos por clase, con la misma luz y encuadre que en produccion.")
     return 0

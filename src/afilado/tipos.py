@@ -63,3 +63,15 @@ class Detector(Protocol):
     @property
     def descripcion(self) -> str: ...
     def predecir(self, frame: np.ndarray) -> list[Deteccion]: ...
+
+@dataclass
+class Veredicto:
+    """Resultado de CLASIFICAR la sierra completa (aprobada / rechazada / ...).
+
+    A diferencia de Deteccion, no lleva caja ni medida: la clasificacion juzga la
+    imagen entera, no localiza un objeto dentro de ella.
+    """
+    clase: str
+    clase_id: int
+    confianza: float
+    probabilidades: dict[str, float] = field(default_factory=dict)

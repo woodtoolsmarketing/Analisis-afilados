@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 from .config import AppConfig
-from .tipos import Deteccion, ResultadoFrame
+from .tipos import Deteccion, ResultadoFrame, Veredicto
 
 _FUENTE = cv2.FONT_HERSHEY_SIMPLEX
 _MARGEN = 3          # px de aire entre el texto y el borde de su fondo
@@ -247,5 +247,59 @@ def dibujar(
 
     if mostrar_ayuda:
         _dibujar_ayuda(lienzo, _AYUDA)
+
+    return lienzo
+
+
+_AYUDA_CLASIFICACION: tuple[str, ...] = (
+    "a guardar como APROBADA | r guardar como RECHAZADA",
+    "q/ESC salir | p pausa | h ocultar/mostrar ayuda",
+)
+
+
+def dibujar_veredicto(
+    frame: np.ndarray,
+    veredicto: Optional[Veredicto],
+    cfg: AppConfig,
+    mostrar_ayuda: bool = True,
+    mensaje: Optional[str] = None,
+    capturas: int = 0,
+) -> np.ndarray:
+    """COPIA anotada para el modo clasificacion: banda grande con el veredicto de la sierra.
+
+    Si 'veredicto' es None, muestra el estado de recoleccion (sin modelo entrenado todavia).
+    Verde para clases sanas, rojo para las de defecto (cfg.clases_defecto).
+    """
+    lienzo = frame.copy()
+    ancho = lienzo.shape[1]
+
+    if veredicto is None:
+        color = _GRIS
+        titulo = "SIN MODELO - MODO RECOLECCION"
+        detalle = "Apunta a una sierra y archivala: a=aprobada  r=rechazada"
+    else:
+        color = color_de_clase(veredicto.clase, cfg)
+        titulo = f"{veredicto.clase.upper()}   {veredicto.confianza * 100:.0f}%"
+        # segunda linea: probabilidades de todas las clases, para ver que tan al limite quedo
+        partes = [f"{c}: {p * 100:.0f}%" for c, p in sorted(
+            veredicto.probabilidades.items(), key=lambda kv: kv[1], reverse=True)]
+        detalle = "  |  ".join(partes)
+
+    # banda superior con el titulo grande
+    cv2.rectangle(lienzo, (0, 0), (ancho, 92), color, cv2.FILLED)
+    cv2.putText(lienzo, titulo, (16, 62), _FUENTE, 1.4, _color_texto(color), 3, cv2.LINE_AA)
+    if detalle:
+        texto_con_fondo(lienzo, detalle, (8, 100), _NEGRO, 0.6)
+
+    texto_con_fondo(lienzo, f"modelo: {veredicto is not None and 'clasificador' or 'ninguno'}"
+                    f"  |  guardadas: {capturas}", (8, lienzo.shape[0] - 26), _NEGRO, 0.5)
+
+    if mensaje:
+        ancho_bloque, _, _ = _tamano_texto(mensaje, 0.7)
+        x = max(0, (ancho - ancho_bloque) // 2)
+        texto_con_fondo(lienzo, mensaje, (x, 120), _VERDE, 0.7)
+
+    if mostrar_ayuda:
+        _dibujar_ayuda(lienzo, _AYUDA_CLASIFICACION)
 
     return lienzo

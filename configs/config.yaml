@@ -56,10 +56,10 @@ detector:
   # Ruta a los pesos entrenados. Si el archivo no existe se usa el detector geometrico
   # de respaldo (Otsu + contornos), que permite medir y recolectar datos desde el dia 1.
   pesos: models/afilado_best.pt
-  # "segment" (mascaras, medidas precisas) o "detect" (solo cajas).
-  # Para el esquema binario aprobada/rechazada a nivel de disco completo alcanza "detect":
-  # una caja por sierra, sin necesidad de contorno pixel a pixel.
-  tarea: detect
+  # "classify" (veredicto de la sierra entera: aprobada/rechazada), "detect" (cajas) o
+  # "segment" (mascaras + medidas). El sistema esta en modo clasificacion: run_live muestra
+  # el veredicto y, sin modelo aun, entra en modo recoleccion (juntar fotos por clase).
+  tarea: classify
   # Umbral alto a proposito: el aserrin, las manchas de aceite y los reflejos del metal
   # pulido generan detecciones espurias de confianza media. Preferimos perder una
   # deteccion dudosa antes que reportar un defecto inexistente.

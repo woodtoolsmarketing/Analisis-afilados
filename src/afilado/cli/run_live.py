@@ -34,11 +34,16 @@ import cv2
 import numpy as np
 
 from .. import overlay
-from ..almacen import AlmacenFeedback
+from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara
 from ..config import AppConfig, cargar_config, ruta_absoluta
+from ..detector import crear_clasificador
 from ..pipeline import Pipeline
-from ..tipos import ResultadoFrame
+from ..tipos import ResultadoFrame, Veredicto
+
+# Carpeta donde el modo clasificacion archiva las fotos por clase. Su estructura es
+# exactamente la que consume scripts/construir_clasificacion.py: <dir>/<clase>/*.jpg
+_DIR_COLECCION = "data/coleccion"
 
 _registro = logging.getLogger(__name__)
 
@@ -212,6 +217,135 @@ def _guardar(
     return f"GUARDADO {etiqueta}: {ruta.name}"
 
 
+def _clases_de_teclas(cfg: AppConfig) -> dict[int, str]:
+    """Mapea 'a' a la primera clase sana y 'r' a la primera clase de defecto.
+
+    Con el esquema binario aprobada/rechazada esto queda a=aprobada, r=rechazada.
+    """
+    sanas = [c for c in cfg.clases if c not in cfg.clases_defecto]
+    clase_sana = sanas[0] if sanas else cfg.clases[0]
+    clase_defecto = cfg.clases_defecto[0] if cfg.clases_defecto else cfg.clases[-1]
+    return {ord("a"): clase_sana, ord("r"): clase_defecto}
+
+
+def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
+    """Bucle del modo clasificacion: muestra el veredicto y archiva fotos por clase.
+
+    Si no hay modelo entrenado, entra en modo recoleccion: no juzga, pero el operario puede
+    archivar cada sierra en su clase con las teclas, para juntar el dataset y entrenar despues.
+    """
+    clasificador = crear_clasificador(cfg)
+    almacen = AlmacenClasificacion(_DIR_COLECCION, cfg.clases, cfg.feedback.calidad_jpg)
+    teclas_clase = _clases_de_teclas(cfg)
+    fuente_es_camara = _es_camara(cfg.camara.fuente)
+    ruta_grabar = ruta_absoluta(args.grabar) if args.grabar else None
+    grabador: Optional[cv2.VideoWriter] = None
+
+    camara = Camara(cfg.camara)
+    try:
+        camara.abrir()
+    except (RuntimeError, ValueError) as error:
+        _registro.error("%s", error)
+        return 1
+
+    _registro.info("MODO CLASIFICACION | camara: %s", camara.descripcion)
+    _registro.info(
+        "modelo: %s",
+        clasificador.descripcion if clasificador else "SIN MODELO (modo recoleccion)",
+    )
+    _registro.info("archivando fotos en: %s", ruta_absoluta(_DIR_COLECCION))
+    _registro.info(
+        "teclas: q/ESC salir | a guardar APROBADA | r guardar RECHAZADA | p pausa | h ayuda",
+    )
+
+    codigo_salida = 0
+    nulos_seguidos = 0
+    mostrar_ayuda = True
+    en_pausa = False
+    mensaje: Optional[str] = None
+    expira_mensaje = 0.0
+    limpio: Optional[np.ndarray] = None
+    veredicto: Optional[Veredicto] = None
+
+    try:
+        cv2.namedWindow(_VENTANA, cv2.WINDOW_NORMAL)
+        while True:
+            if not en_pausa:
+                frame = camara.leer()
+                if frame is None:
+                    nulos_seguidos += 1
+                    if nulos_seguidos >= _MAX_FRAMES_NULOS:
+                        if fuente_es_camara:
+                            _registro.error(
+                                "la camara dejo de entregar frames (%d fallos seguidos).",
+                                nulos_seguidos,
+                            )
+                            codigo_salida = 2
+                        else:
+                            _registro.info("el video termino")
+                        break
+                    continue
+                nulos_seguidos = 0
+                limpio = frame
+                veredicto = clasificador.clasificar(limpio) if clasificador else None
+
+            if limpio is None:
+                continue
+
+            if mensaje is not None and time.monotonic() >= expira_mensaje:
+                mensaje = None
+            texto_mensaje = mensaje
+            if en_pausa and texto_mensaje is None:
+                texto_mensaje = "PAUSA - p para reanudar"
+
+            anotado = overlay.dibujar_veredicto(
+                limpio, veredicto, cfg,
+                mostrar_ayuda=mostrar_ayuda, mensaje=texto_mensaje,
+                capturas=almacen.total_guardados,
+            )
+
+            if ruta_grabar is not None and not en_pausa:
+                if grabador is None:
+                    grabador = _abrir_grabador(ruta_grabar, anotado, cfg.camara.fps)
+                    if grabador is None:
+                        ruta_grabar = None
+                if grabador is not None:
+                    grabador.write(anotado)
+
+            cv2.imshow(_VENTANA, anotado)
+            tecla = cv2.waitKey(1) & 0xFF
+
+            if tecla in (ord("q"), _ESC):
+                break
+            if tecla == 255:
+                continue
+            if tecla in teclas_clase:
+                clase = teclas_clase[tecla]
+                try:
+                    ruta = almacen.guardar(limpio, clase)
+                    mensaje = f"GUARDADA como {clase}: {ruta.name}"
+                except (OSError, ValueError) as error:
+                    _registro.error("no se pudo guardar: %s", error)
+                    mensaje = "ERROR AL GUARDAR - revise el disco"
+                expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+            elif tecla == ord("p"):
+                en_pausa = not en_pausa
+                mensaje = None
+            elif tecla == ord("h"):
+                mostrar_ayuda = not mostrar_ayuda
+    except KeyboardInterrupt:
+        _registro.info("interrumpido por el operario")
+    finally:
+        if grabador is not None:
+            grabador.release()
+        camara.cerrar()
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
+
+    _registro.info("fotos archivadas en esta sesion: %d", almacen.total_guardados)
+    return codigo_salida
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Punto de entrada del bucle en vivo. Devuelve 0 en exito."""
     logging.basicConfig(
@@ -225,6 +359,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     except (ValueError, OSError) as error:
         _registro.error("configuracion invalida: %s", error)
         return 1
+
+    # Modo clasificacion: veredicto de la sierra entera (aprobada/rechazada), sin cajas ni
+    # medidas. Es un camino aparte que no toca el pipeline de deteccion.
+    if cfg.detector.tarea == "classify":
+        return _ejecutar_clasificacion(cfg, args)
 
     presets_roi = _presets_con_config(cfg)
     indice_roi = 0

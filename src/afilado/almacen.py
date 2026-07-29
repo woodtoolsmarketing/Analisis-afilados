@@ -353,3 +353,45 @@ def _motivo(codigo: Optional[str]) -> str:
     if codigo is None:
         return "motivo no informado"
     return motivos.get(codigo, codigo)
+
+
+class AlmacenClasificacion:
+    """Guarda frames LIMPIOS por clase para el modo clasificacion (aprobada/rechazada/...).
+
+    La estructura de salida es directamente la que espera scripts/construir_clasificacion.py y
+    el entrenamiento de clasificacion:  <directorio>/<clase>/<clase>_<sello>.jpg
+    El operario apunta la camara a una sierra y con una tecla la archiva en su clase; asi el
+    dataset crece sin dibujar cajas. Igual que en el otro almacen, se guarda la imagen LIMPIA.
+    """
+
+    def __init__(self, directorio: str, clases: list[str], calidad_jpg: int = 95) -> None:
+        self._base = ruta_absoluta(directorio)
+        self._clases = list(clases)
+        self._calidad = int(calidad_jpg)
+        self._guardados = 0
+
+    @property
+    def total_guardados(self) -> int:
+        return self._guardados
+
+    def guardar(self, frame_limpio: np.ndarray, clase: str) -> Path:
+        """Escribe el frame en <base>/<clase>/ y devuelve la ruta. No muta el frame de entrada."""
+        if clase not in self._clases:
+            raise ValueError(
+                f"clase '{clase}' desconocida; validas: {', '.join(self._clases)}"
+            )
+        carpeta = self._base / _sanear(clase)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        ahora = datetime.now()
+        sello = ahora.strftime("%Y%m%d_%H%M%S_") + f"{ahora.microsecond // 1000:03d}"
+        base = f"{_sanear(clase)}_{sello}"
+        nombre = base
+        repeticion = 1
+        while (carpeta / f"{nombre}.jpg").exists():
+            nombre = f"{base}_{repeticion}"
+            repeticion += 1
+        destino = carpeta / f"{nombre}.jpg"
+        if not cv2.imwrite(str(destino), frame_limpio, [cv2.IMWRITE_JPEG_QUALITY, self._calidad]):
+            raise OSError(f"no se pudo escribir {destino}")
+        self._guardados += 1
+        return destino

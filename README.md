@@ -214,39 +214,58 @@ Opciones que se pueden agregar:
 | `--sin-roi` | Analizar el frame completo, sin recortar la zona util. |
 | `--grabar salida.mp4` | Grabar la sesion en video. |
 
-### 5.1 Teclas
+El programa arranca en el modo que diga `detector.tarea` en el config. Hoy esta en
+**`classify`** (veredicto aprobada/rechazada). Los otros modos (`detect`, `segment`) sirven para
+la etapa de medicion con ArUco, mas adelante.
+
+### 5.1 Modo clasificacion (el actual): veredicto de la sierra
+
+La pantalla muestra una banda grande arriba con el veredicto: 🟩 **APROBADA** o 🟥 **RECHAZADA**,
+con el porcentaje de confianza. Debajo, las probabilidades de cada clase (para ver si quedo al limite).
 
 | Tecla | Que hace |
 |---|---|
 | `q` o `ESC` | Salir. |
-| **`e`** | **Marcar ERROR de la IA.** Guarda la foto para reentrenar. **Es la tecla mas importante del sistema.** |
-| `g` | Guardar un ejemplo BUENO (la IA acerto). Tambien sirve para el dataset. |
-| `espacio` | Capturar sin dar juicio (simplemente guardar esta imagen). |
-| `r` | Reiniciar la calibracion (si se movio el marcador o la camara). |
+| **`a`** | **Archivar la sierra que se ve como APROBADA** (buena). |
+| **`r`** | **Archivar la sierra que se ve como RECHAZADA** (no afilable). |
 | `p` | Pausa. |
 | `h` | Mostrar u ocultar la ayuda. |
-| `c` | Ciclar el ROI (la zona util recortada). |
 
-Cuando se guarda algo, aparece una confirmacion en pantalla durante un segundo y medio.
+Las fotos se guardan **limpias** (sin la banda dibujada) en `data/coleccion/<clase>/`, que es
+justo la carpeta que despues consume `construir_clasificacion.py`. Asi el operario junta el
+dataset apuntando la camara y apretando una tecla, sin dibujar ni una caja.
 
-### 5.2 Que significa cada color
+**Sin modelo entrenado** la banda dice `SIN MODELO - MODO RECOLECCION`: no juzga, pero las teclas
+`a`/`r` igual archivan las fotos por clase. Es el estado del dia 1: se junta, se entrena, y el
+veredicto se enciende solo cuando aparece `models/afilado_best.pt`.
 
-| Color | Significado |
+Ciclo para mejorar el modelo:
+
+```bash
+# tras varias sesiones juntando fotos en data/coleccion/, se reentrena combinando
+# las tandas originales con lo recolectado (el mismo nombre de clase se junta):
+python scripts/construir_clasificacion.py \
+    --clase aprobada  "ruta/tanda_buenas"  --clase aprobada  data/coleccion/aprobada \
+    --clase rechazada "ruta/tanda_malas"   --clase rechazada data/coleccion/rechazada --forzar
+python -m afilado.cli.train --datos data/clasificacion --epocas 100
+```
+
+### 5.2 Modo deteccion/medicion (`tarea: detect` o `segment`)
+
+Cuando se active la medicion con ArUco, el programa dibuja cajas/contornos y usa estas teclas:
+
+| Tecla | Que hace |
 |---|---|
-| 🟩 **Verde** | Clase OK. La pieza esta bien. |
-| 🟥 **Rojo** | Clase de defecto: desgastado, fisura, astillado u oxido. |
-| 🟨 **Amarillo** | `sin_clasificar`. El sistema encontro un objeto y lo midio, pero todavia no hay modelo entrenado que diga que estado tiene. Es lo normal el dia 1. |
+| **`e`** | **Marcar ERROR de la IA.** Guarda la foto para reentrenar. |
+| `g` | Guardar un ejemplo BUENO. |
+| `espacio` | Capturar sin dar juicio. |
+| `r` | Reiniciar la calibracion del ArUco. |
+| `p` / `h` / `c` | Pausa / ayuda / ciclar ROI. |
 
-### 5.3 Carteles de aviso
-
-| Cartel en rojo | Que hacer |
-|---|---|
-| **CAMARA INCLINADA** | La camara no esta a 90 grados. Corregirla. Las medidas no son confiables. |
-| **SIN ESCALA - medidas no fiables** | No se ve el marcador ArUco. El sistema sigue detectando y midiendo en pixeles, pero **no informa milimetros**. Destapar el marcador. |
+Colores: 🟩 verde = clase sana · 🟥 rojo = defecto · 🟨 amarillo = `sin_clasificar` (sin modelo).
+Avisos: **CAMARA INCLINADA** (no esta a 90°) y **SIN ESCALA** (no se ve el ArUco).
 
 > El sistema **nunca inventa milimetros**. Si no ve el marcador, no da medidas en mm. Punto.
-> Si el marcador queda tapado un rato (una mano, la pieza), sigue usando la ultima escala
-> conocida durante unos 90 cuadros (unos 3 segundos) y despues avisa que no hay escala.
 
 ---
 
@@ -291,9 +310,10 @@ resto del sistema, y arma `data/clasificacion/{train,val}/<clase>/`.
   las memoriza, no porque haya aprendido. No es cautela: **faltan cientos de fotos por clase**.
   Por eso el `best.pt` de prueba se descartó y el sistema sigue en modo geometrico hasta juntar
   datos de verdad. Ver la sección 7.
-- **Falta conectar la clasificacion al programa en vivo** (`run_live` hoy hace deteccion/medicion,
-  no veredicto bueno/malo). Es el proximo paso, una vez que haya fotos suficientes para un modelo
-  que valga la pena.
+- **El veredicto en vivo YA esta conectado** (`run_live` en modo `classify` muestra la banda
+  aprobada/rechazada y archiva fotos por clase con `a`/`r`). Verificado con las sierras de
+  referencia. Lo unico que falta para que sirva de verdad es el modelo entrenado con suficientes
+  fotos: hasta entonces arranca en modo recoleccion. Ver la sección 5.1.
 
 ## 6. EL CICLO DE APRENDIZAJE (la parte mas importante)
 

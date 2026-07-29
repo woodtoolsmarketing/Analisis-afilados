@@ -26,7 +26,7 @@ import numpy as np
 
 from .config import AppConfig, DetectorConfig, FiltrosConfig, ruta_absoluta
 from .filtros import limpiar_mascara
-from .tipos import Deteccion, Detector
+from .tipos import Deteccion, Detector, Veredicto
 
 logger = logging.getLogger(__name__)
 
@@ -268,3 +268,124 @@ def crear_detector(cfg: AppConfig) -> Detector:
         )
         return DetectorGeometrico(cfg.filtros)
     return detector
+
+
+class DetectorClasificador:
+    """Envoltorio sobre un modelo YOLO de CLASIFICACION (aprobada/rechazada/...).
+
+    Juzga la imagen entera y devuelve un unico Veredicto. No localiza cajas ni mide: para el
+    veredicto "esta sierra sirve o no" no hace falta ubicar el defecto, solo mirar el conjunto.
+    `ultralytics`/`torch` se importan de forma perezosa, igual que en DetectorYolo.
+    """
+
+    def __init__(self, cfg: DetectorConfig, clases: list[str]) -> None:
+        self._cfg = cfg
+        self._clases = list(clases)
+        self._modelo: Optional[Any] = None
+        self._nombre_modelo = Path(cfg.pesos).stem or "clasificador"
+        self._nombres_modelo: dict[int, str] = {}
+
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            logger.error(_MENSAJE_SIN_ULTRALYTICS)
+            return
+
+        ruta_pesos = ruta_absoluta(cfg.pesos)
+        if not ruta_pesos.is_file():
+            logger.error("No existe el archivo de pesos: %s", ruta_pesos)
+            return
+
+        self._dispositivo = _resolver_dispositivo(cfg.dispositivo)
+        try:
+            self._modelo = YOLO(str(ruta_pesos))
+        except Exception as exc:  # el .pt puede estar corrupto o ser de otra version
+            logger.error("No se pudo cargar el clasificador %s: %s", ruta_pesos, exc)
+            return
+
+        nombres = getattr(self._modelo, "names", None)
+        if isinstance(nombres, dict):
+            self._nombres_modelo = {int(k): str(v) for k, v in nombres.items()}
+        elif isinstance(nombres, (list, tuple)):
+            self._nombres_modelo = {i: str(v) for i, v in enumerate(nombres)}
+
+    @property
+    def disponible(self) -> bool:
+        return self._modelo is not None
+
+    @property
+    def descripcion(self) -> str:
+        if self._modelo is None:
+            return "clasificador no disponible"
+        return f"clasificador {self._nombre_modelo} ({self._dispositivo})"
+
+    def clasificar(self, frame: np.ndarray) -> Optional[Veredicto]:
+        """Devuelve el Veredicto de la imagen, o None si el modelo no esta o la inferencia falla."""
+        if self._modelo is None:
+            return None
+        try:
+            resultados = self._modelo.predict(
+                frame,
+                imgsz=self._cfg.imgsz,
+                device=self._dispositivo,
+                verbose=False,
+            )
+        except Exception as exc:
+            logger.error("Fallo la clasificacion: %s", exc)
+            return None
+        if not resultados:
+            return None
+
+        probs = getattr(resultados[0], "probs", None)
+        if probs is None:
+            logger.error(
+                "El modelo %s no devolvio probabilidades: no parece de clasificacion. "
+                "Entrena con 'train --datos <carpeta>' o revisa el .pt.",
+                self._nombre_modelo,
+            )
+            return None
+
+        datos = probs.data.cpu().numpy()
+        clase_id = int(probs.top1)
+        confianza = float(probs.top1conf)
+        clase = self._nombres_modelo.get(clase_id, self._clase_por_indice(clase_id))
+        probabilidades = {
+            self._nombres_modelo.get(i, self._clase_por_indice(i)): float(p)
+            for i, p in enumerate(datos)
+        }
+        return Veredicto(
+            clase=clase,
+            clase_id=clase_id,
+            confianza=confianza,
+            probabilidades=probabilidades,
+        )
+
+    def _clase_por_indice(self, indice: int) -> str:
+        if 0 <= indice < len(self._clases):
+            return self._clases[indice]
+        return f"clase_{indice}"
+
+
+def crear_clasificador(cfg: AppConfig) -> Optional[DetectorClasificador]:
+    """Devuelve el clasificador si hay pesos y ultralytics; si no, None (modo recoleccion).
+
+    Que devuelva None NO es un error: significa que todavia no hay modelo entrenado y el
+    programa en vivo entra en modo recoleccion (juntar fotos etiquetadas a mano con las teclas).
+    """
+    ruta_pesos = ruta_absoluta(cfg.detector.pesos)
+    if not ruta_pesos.is_file():
+        logger.warning(
+            "No hay modelo de clasificacion en %s. Modo recoleccion: usa las teclas para "
+            "guardar fotos por clase y despues entrena.",
+            ruta_pesos,
+        )
+        return None
+    clasificador = DetectorClasificador(cfg.detector, cfg.clases)
+    if not clasificador.disponible:
+        logger.warning(
+            "Hay pesos en %s pero el clasificador no se pudo cargar (falta ultralytics/torch "
+            "o el archivo no es valido). Modo recoleccion.",
+            ruta_pesos,
+        )
+        return None
+    return clasificador

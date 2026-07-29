@@ -20,7 +20,7 @@ import yaml
 CLASES_POR_DEFECTO: list[str] = ["ok", "desgastado", "fisura", "astillado", "oxido"]
 CLASES_DEFECTO_POR_DEFECTO: list[str] = ["desgastado", "fisura", "astillado", "oxido"]
 
-TAREAS_VALIDAS: frozenset[str] = frozenset({"detect", "segment"})
+TAREAS_VALIDAS: frozenset[str] = frozenset({"detect", "segment", "classify"})
 
 
 @dataclass
