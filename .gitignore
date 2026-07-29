@@ -29,6 +29,11 @@ htmlcov/
 # la excepcion !data/.gitkeep nunca se evaluaria.
 data/*
 !data/.gitkeep
+# La referencia dorada (patron de aceptacion) SI va al repo: es curada, chica y es el
+# estandar contra el que se compara todo. Los datasets y el feedback (miles de imagenes
+# generadas) siguen ignorados.
+!data/referencia/
+data/referencia/descartadas_por_nitidez/
 
 # Pesos de modelos: binarios de decenas de MB, versionalos aparte
 models/*.pt
