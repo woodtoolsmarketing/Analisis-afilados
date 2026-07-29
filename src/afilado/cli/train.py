@@ -45,6 +45,8 @@ _MENSAJE_SIN_ULTRALYTICS = (
 )
 
 _DESTINO_PESOS = "models/afilado_best.pt"
+_MODELO_DETECCION = "yolo11n-seg.pt"
+_MODELO_CLASIFICACION = "yolo11n-cls.pt"
 
 
 def _construir_parser() -> argparse.ArgumentParser:
@@ -59,12 +61,18 @@ def _construir_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--datos",
         default="data/dataset/data.yaml",
-        help="Ruta al data.yaml del dataset (train/val/nc/names).",
+        help=(
+            "Que entrenar. Un archivo data.yaml -> deteccion/segmentacion. Una CARPETA con "
+            "subcarpetas train/ y val/ (una por clase) -> clasificacion (aprobada/rechazada)."
+        ),
     )
     parser.add_argument(
         "--modelo",
-        default="yolo11n-seg.pt",
-        help="Modelo base del que partir. Se descarga solo si no esta en disco.",
+        default=_MODELO_DETECCION,
+        help=(
+            "Modelo base del que partir. Se descarga solo si no esta en disco. Si entrenas "
+            "clasificacion y dejas el valor por defecto, se usa " + _MODELO_CLASIFICACION + "."
+        ),
     )
     parser.add_argument(
         "--epocas",
@@ -180,11 +188,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = _construir_parser().parse_args(argv)
 
     ruta_datos = ruta_absoluta(args.datos)
-    if not ruta_datos.is_file():
+    es_clasificacion = ruta_datos.is_dir()
+    if not ruta_datos.exists():
         print(
             f"ERROR: no existe el dataset '{ruta_datos}'.\n"
-            "Genera el data.yaml con: python -m afilado.cli.prepare_dataset dividir "
-            "--origen <carpeta> --salida data/dataset"
+            "Deteccion: genera el data.yaml con  python -m afilado.cli.prepare_dataset dividir "
+            "--origen <carpeta> --salida data/dataset\n"
+            "Clasificacion: pasa la carpeta con subcarpetas train/ y val/ (una por clase)."
+        )
+        return 2
+    if es_clasificacion and not (ruta_datos / "train").is_dir():
+        print(
+            f"ERROR: '{ruta_datos}' es una carpeta pero no tiene subcarpeta train/.\n"
+            "Para clasificacion se espera: <carpeta>/train/<clase>/*.jpg y "
+            "<carpeta>/val/<clase>/*.jpg"
         )
         return 2
 
@@ -194,18 +211,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"ERROR: {_MENSAJE_SIN_ULTRALYTICS}")
         return 3
 
+    # Si es clasificacion y quedo el modelo por defecto de deteccion, cambiar al de clasificacion.
+    modelo_base = args.modelo
+    if es_clasificacion and modelo_base == _MODELO_DETECCION:
+        modelo_base = _MODELO_CLASIFICACION
+
     dispositivo, es_cpu = _resolver_dispositivo(args.dispositivo)
     if es_cpu and not _confirmar_cpu(args.si):
         print("Entrenamiento cancelado.")
         return 1
 
+    print(f"Tarea:       {'clasificacion (aprobada/rechazada)' if es_clasificacion else 'deteccion/segmentacion'}")
     print(f"Dataset:     {ruta_datos}")
-    print(f"Modelo base: {args.modelo}")
+    print(f"Modelo base: {modelo_base}")
     print(f"Dispositivo: {dispositivo}")
     print(f"Epocas: {args.epocas} | batch: {args.batch} | imgsz: {args.imgsz}")
 
     try:
-        modelo = YOLO(args.modelo)
+        modelo = YOLO(modelo_base)
         resultados_entrenamiento = modelo.train(
             data=str(ruta_datos),
             epochs=args.epocas,
@@ -228,12 +251,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"ERROR durante el entrenamiento: {error}")
         return 4
 
-    map50 = _metrica(metricas, ("metrics/mAP50(B)", "metrics/mAP50(M)"))
-    map50_95 = _metrica(metricas, ("metrics/mAP50-95(B)", "metrics/mAP50-95(M)"))
-
     print("\n--- Metricas de validacion ---")
-    print(f"mAP50:    {_formatear_metrica(map50)}")
-    print(f"mAP50-95: {_formatear_metrica(map50_95)}")
+    if es_clasificacion:
+        # Clasificacion: precision top-1 = fraccion de fotos cuya clase mas probable acerto.
+        top1 = _metrica(metricas, ("metrics/accuracy_top1", "metrics/accuracy_top1(C)"))
+        print(f"precision (top-1): {_formatear_metrica(top1)}")
+    else:
+        map50 = _metrica(metricas, ("metrics/mAP50(B)", "metrics/mAP50(M)"))
+        map50_95 = _metrica(metricas, ("metrics/mAP50-95(B)", "metrics/mAP50-95(M)"))
+        print(f"mAP50:    {_formatear_metrica(map50)}")
+        print(f"mAP50-95: {_formatear_metrica(map50_95)}")
 
     directorio_corrida = Path(str(getattr(resultados_entrenamiento, "save_dir", "")))
     if not directorio_corrida.name:

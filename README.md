@@ -262,16 +262,38 @@ Ya se cargaron los dos primeros casos reales, que fijan los dos extremos del sis
 **Esquema de clases:** binario — `aprobada` / `rechazada`. La sierra completa se juzga sana o
 descartada; todavia no se detalla *por que* se rechaza (eso es un refinamiento futuro).
 
+**Como se entrena (clasificacion de imagenes):** juzgar la sierra entera como buena o
+descartada es un problema de **clasificacion**, no de deteccion con cajas. Ventaja para el
+taller: **no hay que dibujar ni una caja**, solo separar las fotos en carpetas por clase. El
+flujo es:
+
+```bash
+# 1. Separas las fotos en dos carpetas (buenas / no afilables) y las convertis en dataset:
+python scripts/construir_clasificacion.py \
+    --clase aprobada  "ruta/a/fotos_sierras_buenas" \
+    --clase rechazada "ruta/a/fotos_no_afilables" \
+    --forzar
+# 2. Entrenas (si --datos es una CARPETA, train.py entra en modo clasificacion solo):
+python -m afilado.cli.train --datos data/clasificacion --epocas 100
+```
+
+El script `construir_clasificacion.py` aplica el mismo filtro de nitidez y deduplicacion que el
+resto del sistema, y arma `data/clasificacion/{train,val}/<clase>/`.
+
 **Lo que se validó con estas fotos reales:**
 - El **filtro de nitidez** descartó solo las tomas movidas (de 51 fotos de la rechazada, ~35
   borrosas fuera; de 15 de la aprobada, 9 fuera). Funciona sobre fotos de taller, no de laboratorio.
-- El **camino de entrenamiento** (`prepare_dataset dividir` → `train`) corre de punta a punta y
-  produce el `best.pt`.
+- El **camino de clasificacion** (`construir_clasificacion` → `train`) corre de punta a punta y
+  produce el `best.pt`. Quedaron 18 fotos de entrenamiento (6 aprobada + curadas de 12 rechazada).
 
 **Lo que todavía NO funciona (y es esperado):**
-- El modelo entrenado con estas ~10 fotos es **inservible** — en la prueba detectó 0. No es
-  cautela: **10 imagenes no alcanzan**. Por eso el `best.pt` de prueba se descartó y el sistema
-  sigue en modo geometrico (recolección) hasta juntar datos de verdad. Ver la sección 7.
+- El modelo entrenado con ~22 fotos es **inservible**: da 100% en 4 fotos de validacion porque
+  las memoriza, no porque haya aprendido. No es cautela: **faltan cientos de fotos por clase**.
+  Por eso el `best.pt` de prueba se descartó y el sistema sigue en modo geometrico hasta juntar
+  datos de verdad. Ver la sección 7.
+- **Falta conectar la clasificacion al programa en vivo** (`run_live` hoy hace deteccion/medicion,
+  no veredicto bueno/malo). Es el proximo paso, una vez que haya fotos suficientes para un modelo
+  que valga la pena.
 
 ## 6. EL CICLO DE APRENDIZAJE (la parte mas importante)
 
