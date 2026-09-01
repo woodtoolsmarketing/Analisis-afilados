@@ -65,7 +65,25 @@ detector:
   # deteccion dudosa antes que reportar un defecto inexistente.
   confianza: 0.80
   iou: 0.45
-  imgsz: 640
+  # Lado en px al que se reescala la imagen antes de entrar a la red. TIENE QUE COINCIDIR con
+  # el imgsz con el que se entreno el modelo: entrenar a 224 e inferir a 640 (o al reves) no
+  # da ningun error, degrada el veredicto en silencio, que es la peor forma de fallar.
+  # 224 es el tamano nativo de los modelos de clasificacion: yolo11n-cls se entrena a 224, y
+  # correrlo a 640 son ocho veces mas cuentas a cambio de nada.
+  # Medido en un i5-12400 sin GPU: en vivo, 640 tarda 35 ms por frame y 224 tarda 12 ms;
+  # entrenando, 640 rinde 4.4 img/s y 224 rinde 17.1 img/s.
+  # Para tarea "detect"/"segment" hay que volver a 640: ahi el tamano SI manda, porque un
+  # diente de 2 mm reducido a 224 px queda en un punado de pixeles.
+  imgsz: 224
+  # Cada cuantos frames se vuelve a preguntar el veredicto a la red. 1 = en todos (lo mas caro).
+  # Una sierra apoyada en la mesa no cambia de estado 30 veces por segundo, y la red es lo unico
+  # caro del bucle. Con 5, a 30 fps, el veredicto en pantalla tiene a lo sumo 167 ms de atraso
+  # --imperceptible para el operario-- y el costo de computo se divide por cinco. Es la palanca
+  # mas grande para que el sistema ande en una PC sin GPU.
+  # Bajarlo a 1 o 2 si la camara mira piezas EN MOVIMIENTO (una cinta, una carga continua):
+  # ahi el atraso si se nota. Subirlo mas solo tiene sentido con la pieza quieta.
+  # Solo aplica a tarea "classify".
+  clasificar_cada_n_frames: 5
   # "auto" = cuda:0 si hay GPU disponible, si no cpu.
   dispositivo: auto
   max_detecciones: 20
