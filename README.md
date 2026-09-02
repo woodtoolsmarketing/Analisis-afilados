@@ -55,6 +55,15 @@ cd C:\Users\WoodTools-02\Desktop\vscode\Analisis-afilado
 El script crea el entorno virtual (`.venv`), instala todo lo que hace falta y deja el
 proyecto listo. Puede tardar varios minutos: se baja bastante.
 
+Entre otras cosas registra la carpeta `src\` en el entorno, que es lo que permite escribir
+`python -m afilado.cli.run_live` sin mas vueltas. **Si se salta este script** y se instalan
+las dependencias a mano, ese comando falla con `ModuleNotFoundError: No module named
+'afilado'`; la salida rapida es anteponer, en cada consola:
+
+```powershell
+$env:PYTHONPATH = "src"
+```
+
 Si Windows se queja de que no puede ejecutar scripts, correr una sola vez:
 
 ```powershell
@@ -535,6 +544,11 @@ Esta es la maquina donde se entrena el modelo, no necesariamente la del taller.
 ---
 
 ## 11. Preguntas frecuentes del taller
+
+**Dice `ModuleNotFoundError: No module named 'afilado'`.**
+El entorno no tiene registrada la carpeta `src\`. Se arregla corriendo `.\scripts\setup.ps1`
+(es idempotente, se puede correr las veces que haga falta). Como parche momentaneo, en esa
+misma consola: `$env:PYTHONPATH = "src"`.
 
 **Dice "SIN ESCALA" todo el tiempo.**
 No ve el marcador. Revisar que este dentro del cuadro, bien iluminado, sin brillos, sin
