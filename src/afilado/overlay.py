@@ -193,14 +193,21 @@ def _dibujar_hud(img: np.ndarray, lineas: Sequence[str]) -> int:
     return y
 
 
-def _dibujar_ayuda(img: np.ndarray, lineas: Sequence[str]) -> None:
-    """Apila la ayuda de teclas abajo a la izquierda, de la ultima linea hacia arriba."""
+def _dibujar_ayuda(img: np.ndarray, lineas: Sequence[str]) -> int:
+    """Apila la ayuda de teclas abajo a la izquierda, de la ultima linea hacia arriba.
+
+    Devuelve la Y del borde SUPERIOR del bloque dibujado, para que quien llame pueda apilar
+    algo encima sin pisarlo. Sin ese dato, cualquier texto anclado al pie del frame termina
+    debajo de la ayuda: texto_con_fondo recorta contra el borde, asi que no se nota que se
+    solapan, solo se ve ilegible.
+    """
     alto = img.shape[0]
     y = alto - 8
     for linea in reversed(lineas):
         _, alto_bloque, _ = _tamano_texto(linea, 0.45)
         y -= alto_bloque + 2
         texto_con_fondo(img, linea, (8, y), _NEGRO, 0.45)
+    return y
 
 
 def dibujar(
@@ -291,15 +298,23 @@ def dibujar_veredicto(
     if detalle:
         texto_con_fondo(lienzo, detalle, (8, 100), _NEGRO, 0.6)
 
-    texto_con_fondo(lienzo, f"modelo: {veredicto is not None and 'clasificador' or 'ninguno'}"
-                    f"  |  guardadas: {capturas}", (8, lienzo.shape[0] - 26), _NEGRO, 0.5)
-
     if mensaje:
         ancho_bloque, _, _ = _tamano_texto(mensaje, 0.7)
         x = max(0, (ancho - ancho_bloque) // 2)
         texto_con_fondo(lienzo, mensaje, (x, 120), _VERDE, 0.7)
 
+    # La ayuda va primero para saber hasta donde subio, y el estado se apila JUSTO ENCIMA.
+    # El contador de guardadas es la unica confirmacion permanente de que la foto se
+    # archivo (el cartel verde dura 1.5 s), asi que no puede quedar debajo de la ayuda.
+    tope = lienzo.shape[0] - 8
     if mostrar_ayuda:
-        _dibujar_ayuda(lienzo, _AYUDA_CLASIFICACION)
+        tope = _dibujar_ayuda(lienzo, _AYUDA_CLASIFICACION)
+
+    estado = (
+        f"modelo: {'clasificador' if veredicto is not None else 'ninguno'}"
+        f"  |  guardadas: {capturas}"
+    )
+    _, alto_estado, _ = _tamano_texto(estado, 0.5)
+    texto_con_fondo(lienzo, estado, (8, tope - alto_estado - 2), _NEGRO, 0.5)
 
     return lienzo

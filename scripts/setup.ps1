@@ -191,6 +191,36 @@ if ($LASTEXITCODE -ne 0) {
 }
 Escribir-Ok "Dependencias instaladas"
 
+# --- Que "python -m afilado..." encuentre el paquete -------------------------
+# El codigo vive en src/ y el proyecto no se instala como paquete: se trabaja sobre los
+# archivos, sin reinstalar en cada cambio. El precio es que src/ no esta en el path, y
+# entonces "python -m afilado.cli.run_live" --el comando que documenta el README-- falla
+# con ModuleNotFoundError. Un archivo .pth en site-packages agrega esa carpeta al path:
+# es el mismo mecanismo que usa "pip install -e", sin instalar ni copiar nada.
+Escribir-Titulo "Registrando src/ en el entorno"
+
+$sitePackages = & $PythonVenv -c "import sysconfig; print(sysconfig.get_paths()['purelib'])" 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sitePackages)) {
+    Escribir-Aviso "No se pudo ubicar site-packages del entorno."
+    Write-Host "  Vas a tener que anteponer PYTHONPATH en cada corrida:" -ForegroundColor Yellow
+    Write-Host "    `$env:PYTHONPATH = 'src'" -ForegroundColor White
+} else {
+    $rutaPth = Join-Path $sitePackages.Trim() "afilado-src.pth"
+    $rutaSrc = Join-Path $RaizRepo "src"
+    # Sin BOM: Python lee los .pth linea por linea y un BOM al principio le arruina la ruta.
+    $sinBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($rutaPth, $rutaSrc + [Environment]::NewLine, $sinBom)
+
+    $comprobacion = & $PythonVenv -c "import afilado; print(afilado.__file__)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($comprobacion)) {
+        Escribir-Ok "python -m afilado.cli.run_live ya encuentra el paquete"
+    } else {
+        Escribir-Aviso "Se escribio $rutaPth pero 'import afilado' sigue fallando."
+        Write-Host "  Como salida de emergencia, antes de cada corrida:" -ForegroundColor Yellow
+        Write-Host "    `$env:PYTHONPATH = 'src'" -ForegroundColor White
+    }
+}
+
 # --- Conflicto de OpenCV -----------------------------------------------------
 # ultralytics declara opencv-python como dependencia, asi que pip lo instala igual y
 # pisa el cv2 de contrib, dejandonos sin cv2.aruco. Hay que corregirlo despues.

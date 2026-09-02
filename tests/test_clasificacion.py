@@ -345,3 +345,65 @@ def test_clases_y_lado_se_leen_por_separado():
         "aprobada",
         "rechazada",
     ]
+
+
+def test_la_ayuda_informa_donde_termina_su_bloque():
+    """_dibujar_ayuda tiene que decir hasta donde subio, o nadie puede apilar encima.
+
+    texto_con_fondo recorta contra el borde del frame, asi que un texto que cae debajo de
+    la ayuda no se ve "cortado": se ve ilegible, y nadie se entera de que se solapan.
+    """
+    img = np.zeros((200, 400, 3), np.uint8)
+
+    tope = overlay._dibujar_ayuda(img, ("primera linea", "segunda linea"))
+
+    assert 0 < tope < 200
+    assert img[:tope].max() == 0, "dibujo por encima del tope que informa"
+    assert img[tope:].max() > 0, "no dibujo nada debajo del tope"
+
+
+def test_el_contador_de_guardadas_se_dibuja_encima_de_la_ayuda():
+    """El contador es la unica confirmacion PERMANENTE de que la foto se archivo.
+
+    El cartel verde de "GUARDADA" dura 1.5 segundos y se va; si el contador queda debajo
+    de la ayuda (que esta visible por defecto), el operario no tiene forma de saber si
+    apreto bien la tecla.
+    """
+    cfg = AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+    veredicto = Veredicto(
+        clase="aprobada",
+        clase_id=0,
+        confianza=0.9,
+        probabilidades={"aprobada": 0.9, "rechazada": 0.1},
+    )
+    frame = np.full((480, 640, 3), 127, np.uint8)
+
+    con_cero = overlay.dibujar_veredicto(
+        frame, veredicto, cfg, mostrar_ayuda=True, mensaje=None, capturas=0
+    )
+    con_siete = overlay.dibujar_veredicto(
+        frame, veredicto, cfg, mostrar_ayuda=True, mensaje=None, capturas=7
+    )
+
+    tope_ayuda = overlay._dibujar_ayuda(np.zeros_like(frame), overlay._AYUDA_CLASIFICACION)
+    filas_distintas = np.argwhere(np.any(con_cero != con_siete, axis=2))
+
+    assert filas_distintas.size > 0, "cambiar el contador no cambio la imagen: quedo tapado"
+    assert int(filas_distintas[:, 0].max()) < tope_ayuda, (
+        "el contador invade la franja de la ayuda y queda ilegible"
+    )
+
+
+def test_el_contador_tambien_aparece_con_la_ayuda_oculta():
+    """Con la tecla h se esconde la ayuda; el contador tiene que seguir estando."""
+    cfg = AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+    frame = np.full((480, 640, 3), 127, np.uint8)
+
+    con_cero = overlay.dibujar_veredicto(
+        frame, None, cfg, mostrar_ayuda=False, mensaje=None, capturas=0
+    )
+    con_siete = overlay.dibujar_veredicto(
+        frame, None, cfg, mostrar_ayuda=False, mensaje=None, capturas=7
+    )
+
+    assert not np.array_equal(con_cero, con_siete)

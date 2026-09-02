@@ -55,6 +55,15 @@ cd C:\Users\WoodTools-02\Desktop\vscode\Analisis-afilado
 El script crea el entorno virtual (`.venv`), instala todo lo que hace falta y deja el
 proyecto listo. Puede tardar varios minutos: se baja bastante.
 
+Entre otras cosas registra la carpeta `src\` en el entorno, que es lo que permite escribir
+`python -m afilado.cli.run_live` sin mas vueltas. **Si se salta este script** y se instalan
+las dependencias a mano, ese comando falla con `ModuleNotFoundError: No module named
+'afilado'`; la salida rapida es anteponer, en cada consola:
+
+```powershell
+$env:PYTHONPATH = "src"
+```
+
 Si Windows se queja de que no puede ejecutar scripts, correr una sola vez:
 
 ```powershell
@@ -74,12 +83,6 @@ Se nota que quedo activo porque la linea de la consola empieza con `(.venv)`.
 Por defecto se instala la version de `torch` que trabaja con el procesador (CPU). Anda,
 pero **entrenar en CPU es lentisimo** (dias en vez de horas). Si la maquina tiene una placa
 NVIDIA, conviene instalar la version con CUDA.
-
-> **Matiz medido** (i5-12400, sin placa de video): lo de "dias" vale para **deteccion y
-> segmentacion** a 640 px. La **clasificacion** binaria de hoy, a 224 px, rinde ~17 imagenes
-> por segundo en CPU: un dataset de 1000 fotos con 100 epocas sale en aproximadamente 1,6
-> horas. Para la etapa actual del proyecto **no hace falta placa de video**, ni para entrenar
-> ni para usar el sistema en el taller.
 
 Primero verificar que la placa se ve:
 
@@ -313,21 +316,6 @@ dataset apuntando la camara y apretando una tecla, sin dibujar ni una caja.
 **Sin modelo entrenado** la banda dice `SIN MODELO - MODO RECOLECCION`: no juzga, pero las teclas
 `a`/`r` igual archivan las fotos por clase. Es el estado del dia 1: se junta, se entrena, y el
 veredicto se enciende solo cuando aparece `models/afilado_best.pt`.
-
-**Las dos perillas que definen cuanta maquina hace falta** (en `configs/config.yaml`,
-seccion `detector`):
-
-| Ajuste | Valor | Que hace |
-|---|---|---|
-| `imgsz` | `224` | Lado en px al que se reescala la imagen antes de entrar a la red. Es el tamano nativo de los modelos de clasificacion; a 640 son ocho veces mas cuentas a cambio de nada. **Tiene que ser el mismo con el que se entreno**: entrenar a uno e inferir a otro no da error, empeora el veredicto en silencio. `train` ya usa 224 solo cuando la tarea es clasificacion, y avisa si los dos numeros no coinciden. |
-| `clasificar_cada_n_frames` | `5` | Cada cuantos frames se le vuelve a preguntar a la red. Con 5, a 30 fps, el veredicto en pantalla tiene a lo sumo 167 ms de atraso (imperceptible) y la maquina hace la quinta parte del trabajo. La imagen que se ve y la que se archiva con `a`/`r` siguen siendo siempre la actual: lo que se reusa es el juicio, no la foto. |
-
-Medido en un i5-12400 sin placa de video, los dos juntos bajan el costo de la red de 35 ms
-por frame a 2,4 ms promedio. Con eso el sistema corre comodo en una PC de oficina sin GPU.
-
-> Bajar `clasificar_cada_n_frames` a 1 o 2 solo si la camara mira piezas **en movimiento**
-> (una cinta, carga continua): ahi el atraso si se nota. Con la pieza apoyada en la mesa, 5
-> esta de sobra.
 
 Ciclo para mejorar el modelo:
 
@@ -628,6 +616,11 @@ Esta es la maquina donde se entrena el modelo, no necesariamente la del taller.
 ---
 
 ## 11. Preguntas frecuentes del taller
+
+**Dice `ModuleNotFoundError: No module named 'afilado'`.**
+El entorno no tiene registrada la carpeta `src\`. Se arregla corriendo `.\scripts\setup.ps1`
+(es idempotente, se puede correr las veces que haga falta). Como parche momentaneo, en esa
+misma consola: `$env:PYTHONPATH = "src"`.
 
 **Dice "SIN ESCALA" todo el tiempo.**
 No ve el marcador. Revisar que este dentro del cuadro, bien iluminado, sin brillos, sin
