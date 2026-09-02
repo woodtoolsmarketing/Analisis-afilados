@@ -38,6 +38,7 @@ data/referencia/descartadas_por_nitidez/
 # Pesos de modelos: binarios de decenas de MB, versionalos aparte
 models/*.pt
 models/*.onnx
+models/*.onnx.json
 models/*.engine
 models/*.pth
 !models/.gitkeep

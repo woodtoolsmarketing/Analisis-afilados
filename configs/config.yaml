@@ -6,8 +6,24 @@
 camara:
   # Indice de la webcam (0 = la primera) o ruta a un video/carpeta para reproducir en diferido.
   fuente: 0
-  ancho: 1280
-  alto: 720
+  # RESOLUCION DE CAPTURA. Es el costo que se paga en TODOS los frames, se clasifique o no:
+  # decodificar el MJPG que manda la webcam, preparar la entrada de la red y dibujar el
+  # overlay. Medido en un i5-12400 (ms por frame, sumando los tres pasos):
+  #
+  #     1280x720 -> 6.45 ms      800x600 -> 4.04 ms      640x480 -> 3.07 ms
+  #
+  # A 30 fps eso es 19.4% de un nucleo contra 9.2%. En esta maquina no se nota; en una PC
+  # tres o cuatro veces mas lenta es la diferencia entre ir comodo y ir justo.
+  #
+  # QUE SE PIERDE AL BAJARLA (leer antes de tocar):
+  #  - Las fotos que archiva el operario con 'a'/'r' quedan a ESTA resolucion, y son el
+  #    dataset de todos los entrenamientos futuros. Para clasificar alcanza de sobra
+  #    (la red mira 224 px igual), pero es una decision que despues no se puede deshacer.
+  #  - El operario ve la sierra mas chica en pantalla para decidir aprobada/rechazada.
+  #  - Para tarea "detect"/"segment" con medicion por ArUco hay que VOLVER a 1280x720:
+  #    ahi los pixeles sobre el marcador son directamente la precision en milimetros.
+  ancho: 640
+  alto: 480
   fps: 30
   # "auto" resuelve a DSHOW en Windows y a CAP_ANY en el resto.
   backend: auto
@@ -53,8 +69,20 @@ roi:
   h: 0.7
 
 detector:
-  # Ruta a los pesos entrenados. Si el archivo no existe se usa el detector geometrico
-  # de respaldo (Otsu + contornos), que permite medir y recolectar datos desde el dia 1.
+  # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:
+  #
+  #   .pt    checkpoint de ultralytics. Necesita torch (533 MB) + ultralytics. Es lo que
+  #          sale de 'train', y lo natural en la PC de entrenamiento.
+  #   .onnx  el mismo modelo exportado con scripts/exportar_onnx.py. Corre con opencv, que
+  #          este proyecto ya necesita por el modulo aruco: NO hace falta torch. Da el mismo
+  #          veredicto (verificado sobre 34 fotos del taller, diferencia media 0.0011) y usa
+  #          80 MB de RAM en vez de 440 MB, con un entorno de ~250 MB en vez de 1.2 GB.
+  #          Es lo que conviene en la PC del taller. El .onnx viaja SIEMPRE con su archivo
+  #          .onnx.json al lado: ahi estan las clases y el tamano de entrada reales.
+  #
+  # Si el archivo no existe: en clasificacion se entra en modo recoleccion (juntar fotos con
+  # las teclas), y en deteccion se usa el respaldo geometrico (Otsu + contornos), que permite
+  # medir y recolectar datos desde el dia 1.
   pesos: models/afilado_best.pt
   # "classify" (veredicto de la sierra entera: aprobada/rechazada), "detect" (cajas) o
   # "segment" (mascaras + medidas). El sistema esta en modo clasificacion: run_live muestra

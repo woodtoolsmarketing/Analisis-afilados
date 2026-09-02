@@ -108,6 +108,54 @@ driver de la placa.
 
 ---
 
+### 3.3 La PC del taller no necesita torch
+
+Instalar todo (`requirements.txt`) deja un entorno de **1,2 GB**, de los cuales `torch` solo
+son 533 MB. Eso hace falta para **entrenar**, no para **usar** el sistema.
+
+El modelo entrenado se exporta una vez a formato ONNX y desde ahi corre con OpenCV, que este
+proyecto ya necesita si o si por el modulo `aruco`. En la PC de entrenamiento:
+
+```powershell
+pip install onnx
+python scripts/exportar_onnx.py
+```
+
+Eso deja `models/afilado_best.onnx` y su `models/afilado_best.onnx.json`. Se copian los dos
+a la PC del taller (un pendrive alcanza: pesan unos 6 MB entre los dos) y ahi, en
+`configs/config.yaml`:
+
+```yaml
+detector:
+  pesos: models/afilado_best.onnx
+```
+
+Medido en un i5-12400 sin placa de video, corriendo el mismo bucle en vivo:
+
+| | Con `.pt` (torch) | Con `.onnx` |
+|---|---|---|
+| Entorno en disco | 1,2 GB | ~250 MB |
+| RAM del proceso | 440 MB | **48 MB** (pico 82 MB) |
+| Arranque + carga del modelo | ~4 s | ~0,3 s |
+| Inferencia a 224 px | 12 ms | 5,8 ms |
+| Librerias necesarias | torch, ultralytics, opencv, numpy | **opencv, numpy** |
+
+**El veredicto es el mismo.** No es una aproximacion: `scripts/exportar_onnx.py` corre el
+`.pt` y el `.onnx` sobre las mismas fotos del dataset antes de dar el export por bueno, y si
+algun veredicto difiere **borra el archivo y termina con error**. Verificado sobre 34 fotos
+del taller: 34 de 34 coinciden, con una diferencia media de probabilidad de 0,0011.
+
+> Opcional: instalar `onnxruntime` en la PC del taller la hace unas tres veces mas rapida
+> que el `cv2.dnn` que ya trae OpenCV (1,8 ms contra 5,8 ms). Con
+> `clasificar_cada_n_frames: 5` eso es menos de 1 ms por frame, asi que solo vale la pena en
+> maquinas muy justas. El resultado es identico con cualquiera de los dos.
+
+> El `.onnx.json` **no es opcional**. Ahi viajan las clases y el tamano de entrada reales del
+> modelo. Sin ese archivo el programa se cae a lo que diga `configs/config.yaml`, y una lista
+> de clases corrida convierte "aprobada" en "rechazada" sin avisar.
+
+---
+
 ## 4. Puesta a punto FISICA (esto define si el sistema sirve o no)
 
 Esta seccion vale mas que todo el software. Una camara mal puesta arruina las medidas y no
@@ -125,6 +173,27 @@ hay programa que lo arregle despues.
 El programa avisa en pantalla en rojo **"CAMARA INCLINADA"** si detecta que el marcador se
 ve deformado. Si aparece ese cartel, la camara no esta a 90 grados: corregirla antes de
 medir nada.
+
+**Resolucion de captura** (`camara.ancho` / `camara.alto` en el config): viene en
+**640x480**, que es lo que conviene para el modo clasificacion en una PC modesta. Es el
+costo que se paga en TODOS los frames, se clasifique o no. Medido en un i5-12400, sumando
+decodificar el MJPG + preparar la entrada de la red + dibujar el overlay:
+
+| Resolucion | Costo fijo por frame | A 30 fps |
+|---|---|---|
+| 1280x720 | 6,45 ms | 19,4% de un nucleo |
+| 800x600 | 4,04 ms | 12,1% |
+| **640x480** | **3,07 ms** | **9,2%** |
+
+Hay que subirla de nuevo a **1280x720** en dos casos:
+
+- Cuando se pase a `tarea: detect` o `segment` con medicion por ArUco. Ahi los pixeles sobre
+  el marcador **son** la precision en milimetros, y bajarlos es tirar exactitud a la basura.
+- Si el operario necesita ver mejor la sierra en pantalla para decidir.
+
+Tener en cuenta que las fotos que archiva el operario con `a`/`r` quedan a esta resolucion, y
+son el dataset de todos los entrenamientos futuros. Para clasificar sobra (la red mira 224 px
+igual), pero es una decision que despues no se puede deshacer.
 
 ### 4.2 La luz
 
@@ -473,9 +542,12 @@ Analisis-afilado/
 ├── configs/
 │   └── config.yaml           <- TODOS los ajustes. Es lo unico que se toca a mano.
 ├── models/
-│   └── afilado_best.pt       <- el modelo entrenado (aparece despues del primer train)
+│   ├── afilado_best.pt       <- el modelo entrenado (aparece despues del primer train)
+│   ├── afilado_best.onnx     <- el mismo modelo para correr SIN torch (ver seccion 3.3)
+│   └── afilado_best.onnx.json<- clases y tamano de entrada; viaja siempre con el .onnx
 ├── scripts/
 │   ├── setup.ps1             <- instalador
+│   ├── exportar_onnx.py      <- convierte el .pt en .onnx para la PC del taller
 │   └── make_aruco.py         <- genera el marcador para imprimir
 ├── src/afilado/              <- el programa (no tocar)
 │   ├── config.py             <- lee configs/config.yaml

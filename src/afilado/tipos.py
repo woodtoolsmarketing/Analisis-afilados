@@ -75,3 +75,15 @@ class Veredicto:
     clase_id: int
     confianza: float
     probabilidades: dict[str, float] = field(default_factory=dict)
+
+class Clasificador(Protocol):
+    """Interfaz que cumplen DetectorClasificador (.pt) y DetectorClasificadorOnnx (.onnx).
+
+    Las dos rutas dan el mismo veredicto sobre la misma imagen; se diferencian en lo que
+    exigen de la maquina: la .pt necesita torch (533 MB) y la .onnx no.
+    """
+    @property
+    def disponible(self) -> bool: ...
+    @property
+    def descripcion(self) -> str: ...
+    def clasificar(self, frame: np.ndarray) -> Optional[Veredicto]: ...

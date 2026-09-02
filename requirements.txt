@@ -25,6 +25,20 @@ ultralytics>=8.3.0
 # falsos en pantalla. Correla con:  .\.venv\Scripts\python.exe -m pytest tests\ -q
 pytest>=7.0
 
+# EXPORTAR A ONNX (solo en la maquina de ENTRENAMIENTO)
+# scripts/exportar_onnx.py convierte el .pt entrenado en un .onnx que corre SIN torch.
+# Sirve para la PC del taller: pasa de 1.2 GB de entorno y 440 MB de RAM a ~250 MB y 80 MB,
+# con el mismo veredicto. El export necesita el paquete 'onnx' (~20 MB); la maquina que
+# despues corre el .onnx no necesita nada de esto, le alcanza con opencv.
+#     pip install onnx
+#
+# OPCIONAL, en la PC que corre el .onnx: onnxruntime lo hace unas tres veces mas rapido que
+# el cv2.dnn que ya viene con opencv (1.8 ms contra 5.8 ms por inferencia a 224 px). Los dos
+# dan el mismo resultado, asi que es puro ahorro de CPU, no de exactitud. Con
+# detector.clasificar_cada_n_frames en 5 la diferencia es de menos de 1 ms por frame: solo
+# vale la pena en maquinas muy justas.
+#     pip install onnxruntime
+
 # TORCH CON GPU (opcional pero MUY recomendado para entrenar)
 # ultralytics instala torch en su version CPU. En CPU, entrenar es lentisimo:
 # lo que en una GPU NVIDIA tarda un par de horas, en CPU puede tardar dias.
