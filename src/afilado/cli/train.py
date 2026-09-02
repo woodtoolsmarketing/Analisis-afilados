@@ -36,7 +36,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Optional
 
-from ..config import cargar_config, ruta_absoluta
+from ..config import ruta_absoluta
 
 _MENSAJE_SIN_ULTRALYTICS = (
     "No se pudo importar 'ultralytics'. Instalalo con: pip install ultralytics\n"
@@ -47,13 +47,6 @@ _MENSAJE_SIN_ULTRALYTICS = (
 _DESTINO_PESOS = "models/afilado_best.pt"
 _MODELO_DETECCION = "yolo11n-seg.pt"
 _MODELO_CLASIFICACION = "yolo11n-cls.pt"
-
-# Tamano de entrada por tarea. Clasificacion se entrena a 224: es el tamano nativo de los
-# modelos -cls y ocho veces mas barato que 640 sin perder nada (medido: 17.1 img/s contra
-# 4.4 img/s en un i5-12400 sin GPU). Deteccion/segmentacion si necesita 640, porque un diente
-# de 2 mm reducido a 224 px queda en un punado de pixeles.
-_IMGSZ_DETECCION = 640
-_IMGSZ_CLASIFICACION = 224
 
 
 def _construir_parser() -> argparse.ArgumentParser:
@@ -87,16 +80,7 @@ def _construir_parser() -> argparse.ArgumentParser:
         default=150,
         help="Pasadas completas por el dataset.",
     )
-    parser.add_argument(
-        "--imgsz",
-        type=int,
-        default=0,
-        help=(
-            "Lado de la imagen de entrada en px. 0 = el que corresponde a la tarea: "
-            f"{_IMGSZ_CLASIFICACION} en clasificacion, {_IMGSZ_DETECCION} en "
-            "deteccion/segmentacion. Tiene que coincidir con detector.imgsz del config."
-        ),
-    )
+    parser.add_argument("--imgsz", type=int, default=640, help="Lado de la imagen de entrada en px.")
     parser.add_argument(
         "--batch",
         type=int,
@@ -154,22 +138,12 @@ def _resolver_dispositivo(dispositivo: str) -> tuple[str, bool]:
     return "cpu", True
 
 
-def _confirmar_cpu(asumir_si: bool, es_clasificacion: bool) -> bool:
-    """Pide confirmacion antes de entrenar sin GPU, con el costo real de CADA tarea.
-
-    El aviso distingue tarea porque el costo cambia en un orden de magnitud, y un
-    "va a tardar dias" indiscriminado haria que nadie entrene nunca. Medido en un
-    i5-12400 sin placa de video: clasificacion a 224 px rinde ~17 img/s (1000 fotos
-    por 100 epocas dan ~1.6 h), mientras que deteccion/segmentacion a 640 px si se
-    va a dias.
-    """
-    if es_clasificacion:
-        print("AVISO: no se detecto GPU con CUDA. El entrenamiento correra en CPU.")
-        print("       Para clasificacion es llevadero: ~17 imagenes/s en un i5 sin placa,")
-        print("       o sea un par de horas para 1000 fotos y 100 epocas.")
-    else:
-        print("AVISO: no se detecto GPU con CUDA. El entrenamiento correra en CPU y sera")
-        print("       LENTISIMO: para deteccion/segmentacion son dias en vez de horas.")
+def _confirmar_cpu(asumir_si: bool) -> bool:
+    """Pide confirmacion antes de entrenar sin GPU: puede tardar dias, no horas."""
+    print(
+        "AVISO: no se detecto GPU con CUDA. El entrenamiento correra en CPU y sera LENTISIMO\n"
+        "       (dias en vez de horas para un dataset de tamano real).",
+    )
     if asumir_si:
         print("       Se continua igual por --si.")
         return True
@@ -179,33 +153,6 @@ def _confirmar_cpu(asumir_si: bool, es_clasificacion: bool) -> bool:
         print("Sin entrada interactiva disponible. Usa --si para confirmar explicitamente.")
         return False
     return respuesta.strip().lower() in {"s", "si", "y", "yes"}
-
-
-def _avisar_si_difiere_del_config(imgsz: int, es_clasificacion: bool) -> None:
-    """Avisa si run_live va a inferir con un imgsz distinto del que se esta por entrenar.
-
-    Entrenar a un tamano e inferir a otro no lanza ningun error: la red ve una escala que
-    nunca vio y el veredicto se degrada EN SILENCIO. En un taller eso es peor que un crash,
-    porque nadie se entera. Solo se compara cuando el config esta en la misma tarea que se
-    entrena: entrenar un modelo de deteccion mientras el sistema corre en clasificacion es
-    normal y no amerita aviso.
-    """
-    try:
-        cfg = cargar_config(None)
-    except (ValueError, OSError):
-        return  # un config roto ya se hara notar al correr run_live; aca no es el tema
-    if (cfg.detector.tarea == "classify") != es_clasificacion:
-        return
-    if int(cfg.detector.imgsz) != int(imgsz):
-        print(
-            f"AVISO: se va a entrenar con imgsz={imgsz} pero configs/config.yaml tiene "
-            f"detector.imgsz={cfg.detector.imgsz}."
-        )
-        print(
-            "       run_live inferiria a un tamano distinto del entrenado y el veredicto "
-            "se degradaria sin avisar."
-        )
-        print("       Deja los dos numeros iguales antes de llevar el modelo al taller.")
 
 
 def _metrica(resultados: Any, claves: tuple[str, ...]) -> Optional[float]:
@@ -269,11 +216,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     if es_clasificacion and modelo_base == _MODELO_DETECCION:
         modelo_base = _MODELO_CLASIFICACION
 
-    imgsz = args.imgsz or (_IMGSZ_CLASIFICACION if es_clasificacion else _IMGSZ_DETECCION)
-    _avisar_si_difiere_del_config(imgsz, es_clasificacion)
-
     dispositivo, es_cpu = _resolver_dispositivo(args.dispositivo)
-    if es_cpu and not _confirmar_cpu(args.si, es_clasificacion):
+    if es_cpu and not _confirmar_cpu(args.si):
         print("Entrenamiento cancelado.")
         return 1
 
@@ -281,14 +225,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Dataset:     {ruta_datos}")
     print(f"Modelo base: {modelo_base}")
     print(f"Dispositivo: {dispositivo}")
-    print(f"Epocas: {args.epocas} | batch: {args.batch} | imgsz: {imgsz}")
+    print(f"Epocas: {args.epocas} | batch: {args.batch} | imgsz: {args.imgsz}")
 
     try:
         modelo = YOLO(modelo_base)
         resultados_entrenamiento = modelo.train(
             data=str(ruta_datos),
             epochs=args.epocas,
-            imgsz=imgsz,
+            imgsz=args.imgsz,
             batch=args.batch,
             device=dispositivo,
             name=args.nombre,
@@ -296,7 +240,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             patience=args.paciencia,
             workers=args.workers,
         )
-        metricas = modelo.val(data=str(ruta_datos), imgsz=imgsz, device=dispositivo)
+        metricas = modelo.val(data=str(ruta_datos), imgsz=args.imgsz, device=dispositivo)
     except KeyboardInterrupt:
         print(
             "\nEntrenamiento interrumpido por el operario. "

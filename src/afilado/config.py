@@ -73,7 +73,6 @@ class DetectorConfig:
     imgsz: int = 640
     dispositivo: str = "auto"
     max_detecciones: int = 20
-    clasificar_cada_n_frames: int = 1
 
 
 @dataclass
@@ -193,17 +192,6 @@ def _validar(cfg: AppConfig) -> None:
         validas = ", ".join(sorted(TAREAS_VALIDAS))
         raise ValueError(
             f"detector.tarea debe ser una de: {validas}. Se recibio '{cfg.detector.tarea}'."
-        )
-    if int(cfg.detector.clasificar_cada_n_frames) < 1:
-        raise ValueError(
-            "detector.clasificar_cada_n_frames debe ser >= 1, se recibio "
-            f"{cfg.detector.clasificar_cada_n_frames}. Con 1 se clasifica cada frame; con 0 "
-            "o negativo no se clasificaria nunca y la pantalla mostraria un veredicto "
-            "congelado sin avisar."
-        )
-    if int(cfg.detector.imgsz) < 1:
-        raise ValueError(
-            f"detector.imgsz debe ser mayor que 0, se recibio {cfg.detector.imgsz}."
         )
 
     if float(cfg.aruco.lado_mm) <= 0:

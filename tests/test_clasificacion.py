@@ -35,21 +35,6 @@ def test_config_rechaza_tarea_invalida(tmp_path):
         cargar_config(ruta)
 
 
-def test_el_config_del_repo_entrena_e_infiere_al_mismo_tamano():
-    """El config que se distribuye y el imgsz por defecto del entrenamiento deben coincidir.
-
-    Si alguien cambia uno y se olvida del otro, el modelo se entrena a un tamano y se infiere
-    a otro. Eso no lanza ningun error: degrada el veredicto en silencio, que es exactamente
-    el fallo que un taller no puede detectar.
-    """
-    from afilado.cli.train import _IMGSZ_CLASIFICACION, _IMGSZ_DETECCION
-
-    cfg = cargar_config(None)
-    esperado = _IMGSZ_CLASIFICACION if cfg.detector.tarea == "classify" else _IMGSZ_DETECCION
-
-    assert cfg.detector.imgsz == esperado
-
-
 def test_almacen_guarda_por_clase_sin_mutar(tmp_path):
     alm = AlmacenClasificacion(str(tmp_path), ["aprobada", "rechazada"])
     frame = _frame()

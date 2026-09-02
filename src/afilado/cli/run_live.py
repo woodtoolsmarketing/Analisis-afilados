@@ -237,7 +237,6 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
     clasificador = crear_clasificador(cfg)
     almacen = AlmacenClasificacion(_DIR_COLECCION, cfg.clases, cfg.feedback.calidad_jpg)
     teclas_clase = _clases_de_teclas(cfg)
-    cada_n_frames = cfg.detector.clasificar_cada_n_frames
     fuente_es_camara = _es_camara(cfg.camara.fuente)
     ruta_grabar = ruta_absoluta(args.grabar) if args.grabar else None
     grabador: Optional[cv2.VideoWriter] = None
@@ -254,11 +253,6 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
         "modelo: %s",
         clasificador.descripcion if clasificador else "SIN MODELO (modo recoleccion)",
     )
-    if clasificador is not None:
-        _registro.info(
-            "clasificando 1 de cada %d frames (detector.clasificar_cada_n_frames)",
-            cada_n_frames,
-        )
     _registro.info("archivando fotos en: %s", ruta_absoluta(_DIR_COLECCION))
     _registro.info(
         "teclas: q/ESC salir | a guardar APROBADA | r guardar RECHAZADA | p pausa | h ayuda",
@@ -266,7 +260,6 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
 
     codigo_salida = 0
     nulos_seguidos = 0
-    frames_vistos = 0
     mostrar_ayuda = True
     en_pausa = False
     mensaje: Optional[str] = None
@@ -294,15 +287,7 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
                     continue
                 nulos_seguidos = 0
                 limpio = frame
-                # La red se consulta 1 de cada N frames; en el medio se sigue mostrando el
-                # ultimo veredicto. Es lo unico caro del bucle (35 ms contra 1 ms del resto),
-                # y una sierra apoyada en la mesa no cambia de estado 30 veces por segundo.
-                # El frame que se ve y el que se archiva con 'a'/'r' siguen siendo el actual:
-                # lo que se reusa es el juicio, no la imagen.
-                if clasificador is not None:
-                    if frames_vistos % cada_n_frames == 0:
-                        veredicto = clasificador.clasificar(limpio)
-                    frames_vistos += 1
+                veredicto = clasificador.clasificar(limpio) if clasificador else None
 
             if limpio is None:
                 continue

@@ -53,8 +53,6 @@ def test_config_por_defecto_es_valida() -> None:
     assert "ok" in cfg.clases and "ok" not in cfg.clases_defecto
     assert cfg.detector.confianza == 0.80
     assert cfg.detector.tarea == "segment"
-    # Por defecto NO se saltea ningun frame: el ahorro se pide explicitamente en el YAML.
-    assert cfg.detector.clasificar_cada_n_frames == 1
 
 
 def test_archivo_inexistente_devuelve_defaults(tmp_path: Path) -> None:
@@ -222,37 +220,6 @@ def test_tareas_validas(
     ruta = escribir_yaml({"detector": {"tarea": tarea}})
 
     assert cargar_config(ruta).detector.tarea == tarea
-
-
-@pytest.mark.parametrize("cada_n", [0, -1])
-def test_clasificar_cada_n_frames_no_positivo(
-    escribir_yaml: Callable[[dict[str, Any]], Path], cada_n: int
-) -> None:
-    """Con 0 o negativo la red no se consultaria nunca: la pantalla quedaria congelada
-    mostrando un veredicto viejo como si fuera actual."""
-    ruta = escribir_yaml({"detector": {"clasificar_cada_n_frames": cada_n}})
-
-    with pytest.raises(ValueError, match="clasificar_cada_n_frames"):
-        cargar_config(ruta)
-
-
-@pytest.mark.parametrize("cada_n", [1, 5, 30])
-def test_clasificar_cada_n_frames_valido(
-    escribir_yaml: Callable[[dict[str, Any]], Path], cada_n: int
-) -> None:
-    ruta = escribir_yaml({"detector": {"clasificar_cada_n_frames": cada_n}})
-
-    assert cargar_config(ruta).detector.clasificar_cada_n_frames == cada_n
-
-
-@pytest.mark.parametrize("imgsz", [0, -640])
-def test_imgsz_no_positivo(
-    escribir_yaml: Callable[[dict[str, Any]], Path], imgsz: int
-) -> None:
-    ruta = escribir_yaml({"detector": {"imgsz": imgsz}})
-
-    with pytest.raises(ValueError, match="imgsz"):
-        cargar_config(ruta)
 
 
 @pytest.mark.parametrize("lado_mm", [0.0, -30.0])
