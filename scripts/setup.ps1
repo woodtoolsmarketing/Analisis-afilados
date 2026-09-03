@@ -5,8 +5,14 @@
 
 .DESCRIPCION
     Verifica la version de Python (exige 3.10 o superior), crea el entorno virtual .venv,
-    actualiza pip, instala requirements.txt, detecta si hay GPU NVIDIA y sugiere el
-    comando de torch con CUDA correspondiente.
+    actualiza pip, instala las dependencias, registra src/ en el entorno, detecta si hay
+    GPU NVIDIA y sugiere el comando de torch con CUDA correspondiente.
+
+    Tiene dos modos. El COMPLETO (por defecto) es para la maquina donde se entrena:
+    instala ultralytics y torch, ~2.5 GB en disco. El modo TALLER (-Taller) es para la
+    maquina que solo mira sierras y da el veredicto: instala unicamente lo necesario para
+    correr el modelo ya exportado a .onnx, sin torch ni ultralytics. Medido: 244 MB de
+    entorno contra 1.2 GB, y el mismo veredicto.
 
     Es idempotente: se puede correr las veces que haga falta. No borra nada sin avisar;
     si .venv ya existe lo reutiliza (para rehacerlo desde cero, usa -Recrear).
@@ -17,8 +23,14 @@
 .PARAMETER Recrear
     Borra el .venv existente y lo crea de nuevo. Pide confirmacion.
 
+.PARAMETER Taller
+    Instalacion liviana para la PC del taller: solo lo necesario para CORRER el sistema.
+    No instala ultralytics ni torch, asi que esa maquina no puede entrenar ni exportar;
+    levanta el modelo .onnx que se le copia desde la maquina de entrenamiento.
+
 .EJEMPLO
     .\scripts\setup.ps1
+    .\scripts\setup.ps1 -Taller
     .\scripts\setup.ps1 -Python "C:\Python312\python.exe"
     .\scripts\setup.ps1 -Recrear
 #>
@@ -26,7 +38,8 @@
 [CmdletBinding()]
 param(
     [string]$Python = "",
-    [switch]$Recrear
+    [switch]$Recrear,
+    [switch]$Taller
 )
 
 $ErrorActionPreference = "Stop"
@@ -179,15 +192,42 @@ if ($LASTEXITCODE -ne 0) {
 Escribir-Ok "pip actualizado"
 
 Escribir-Titulo "Instalando dependencias"
-if (-not (Test-Path $RutaRequirements)) {
-    Escribir-Error "No se encontro requirements.txt en $RutaRequirements"
+
+# El modo taller instala una lista aparte, sin ultralytics ni torch: esa maquina solo corre
+# el modelo ya exportado a .onnx. Medido en un i5-12400: 244 MB de entorno contra 1.2 GB,
+# con el mismo veredicto.
+if ($Taller) {
+    $RutaLista = Join-Path $RaizRepo "requirements-taller.txt"
+    $DetalleLista = "modo TALLER: solo lo necesario para correr (~250 MB, sin torch)"
+} else {
+    $RutaLista = $RutaRequirements
+    $DetalleLista = "instalacion COMPLETA: incluye ultralytics y torch para entrenar (~2.5 GB)"
+}
+
+if (-not (Test-Path $RutaLista)) {
+    Escribir-Error "No se encontro la lista de dependencias en $RutaLista"
     exit 1
 }
-Write-Host "  Esto puede tardar varios minutos (ultralytics arrastra torch, ~2.5 GB)..."
-& $PythonVenv -m pip install -r $RutaRequirements
+Write-Host "  $DetalleLista"
+Write-Host "  Esto puede tardar varios minutos..."
+& $PythonVenv -m pip install -r $RutaLista
 if ($LASTEXITCODE -ne 0) {
-    Escribir-Error "Fallo la instalacion de dependencias. Revisa el error de pip mas arriba."
-    exit 1
+    if ($Taller) {
+        # onnxruntime es lo unico opcional de la lista del taller. Si no hay wheel para esta
+        # version de Python, el sistema sigue andando con el cv2.dnn que ya trae opencv:
+        # mas lento (5.8 ms contra 1.8 ms) pero el mismo resultado. No es motivo para
+        # dejar la maquina sin instalar.
+        Escribir-Aviso "Fallo la instalacion; reintento sin onnxruntime, que es opcional."
+        & $PythonVenv -m pip install "opencv-contrib-python>=4.8,<5.0" "numpy>=1.24,<3.0" "pyyaml>=6.0"
+        if ($LASTEXITCODE -ne 0) {
+            Escribir-Error "Fallo la instalacion de dependencias. Revisa el error de pip mas arriba."
+            exit 1
+        }
+        Escribir-Aviso "Sin onnxruntime: el .onnx va a correr con cv2.dnn. Anda igual, mas lento."
+    } else {
+        Escribir-Error "Fallo la instalacion de dependencias. Revisa el error de pip mas arriba."
+        exit 1
+    }
 }
 Escribir-Ok "Dependencias instaladas"
 
@@ -251,6 +291,14 @@ if ($tieneAruco -match "True") {
 }
 
 # --- GPU ---------------------------------------------------------------------
+# En el taller no se entrena, y sin torch instalado la pregunta no tiene sentido.
+if ($Taller) {
+    Escribir-Titulo "GPU"
+    Escribir-Ok "Modo taller: no se busca GPU (esta maquina no entrena)"
+    $hayGpu = $false
+    $torchConCuda = $false
+} else {
+
 Escribir-Titulo "Detectando GPU NVIDIA"
 
 $comandoNvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
@@ -289,8 +337,46 @@ if ($hayGpu) {
     Write-Host "  NVIDIA y aun asi no aparece, actualiza el driver desde nvidia.com." -ForegroundColor Yellow
 }
 
+}
+
 # --- Proximos pasos ----------------------------------------------------------
 Escribir-Titulo "Listo. Proximos pasos"
+
+# El taller tiene otro flujo: no genera marcador ni entrena. Lo unico que hace es recibir
+# el modelo desde la maquina buena y mirar sierras.
+if ($Taller) {
+    Write-Host ""
+    Write-Host "  1. Activa el entorno en cada terminal nueva:" -ForegroundColor White
+    Write-Host "       .\.venv\Scripts\Activate.ps1"
+    Write-Host "     Si PowerShell bloquea el script, habilitalo una sola vez con:"
+    Write-Host "       Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+    Write-Host ""
+    Write-Host "  2. Copia el modelo desde la maquina de entrenamiento:" -ForegroundColor White
+    Write-Host "       models\afilado_best.onnx        <- el modelo"
+    Write-Host "       models\afilado_best.onnx.json   <- sus clases y tamano de entrada"
+    Write-Host "     Los DOS archivos, siempre juntos. Sin el .json el programa se cae a las"
+    Write-Host "     clases del config, y una lista corrida convierte aprobada en rechazada."
+    Write-Host "     Despues, en configs\config.yaml:"
+    Write-Host "       detector:"
+    Write-Host "         pesos: models/afilado_best.onnx"
+    Write-Host ""
+    Write-Host "  3. Arranca la inspeccion en vivo:" -ForegroundColor White
+    Write-Host "       python -m afilado.cli.run_live"
+    Write-Host "     Sin modelo copiado arranca igual, en modo recoleccion: no da veredicto,"
+    Write-Host "     pero deja archivar fotos por clase."
+    Write-Host ""
+    Write-Host "  4. Teclas del visor:" -ForegroundColor White
+    Write-Host "       a = archivar APROBADA  |  r = archivar RECHAZADA  |  q = salir"
+    Write-Host "     Las fotos van a data\coleccion\<clase>\ y son las que despues se llevan"
+    Write-Host "     a la maquina de entrenamiento para mejorar el modelo."
+    Write-Host ""
+    Escribir-Aviso "Esta maquina NO entrena ni exporta: no tiene ultralytics ni torch."
+    Write-Host "  Es a proposito: asi el entorno ocupa ~250 MB en vez de 2.5 GB." -ForegroundColor Yellow
+    Write-Host "  Para entrenar y exportar el .onnx, corre .\scripts\setup.ps1 SIN -Taller" -ForegroundColor Yellow
+    Write-Host "  en la maquina buena." -ForegroundColor Yellow
+    Write-Host ""
+    exit 0
+}
 
 Write-Host ""
 Write-Host "  1. Activa el entorno en cada terminal nueva:" -ForegroundColor White

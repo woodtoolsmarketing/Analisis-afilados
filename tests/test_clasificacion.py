@@ -5,6 +5,10 @@ No dependen de torch/ultralytics: cubren la parte del sistema que funciona sin m
 """
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -407,3 +411,71 @@ def test_el_contador_tambien_aparece_con_la_ayuda_oculta():
     )
 
     assert not np.array_equal(con_cero, con_siete)
+
+
+# ---------------------------------------------------------------------------
+# Modo taller (setup.ps1 -Taller). Toda la instalacion liviana --250 MB en vez
+# de 2.5 GB-- se sostiene sobre una sola premisa: CORRER el sistema no importa
+# torch ni ultralytics. Si eso se rompe, la PC del taller deja de arrancar y
+# nadie va a saber por que.
+# ---------------------------------------------------------------------------
+
+_RAIZ = Path(__file__).resolve().parents[1]
+
+
+def test_correr_el_sistema_no_importa_torch_ni_ultralytics(tmp_path):
+    """El camino de ejecucion tiene que quedarse en opencv + numpy + pyyaml.
+
+    Se corre en un proceso aparte a proposito: cualquier otro test de la suite pudo haber
+    importado torch antes, y entonces mirar sys.modules aca no probaria nada.
+    """
+    falso = tmp_path / "modelo.onnx"
+    falso.write_bytes(b"no es un onnx, pero alcanza para recorrer el camino de carga")
+
+    guion = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(_RAIZ / 'src')!r})",
+            "import numpy as np",
+            "from afilado.cli import run_live",
+            "from afilado.config import AppConfig, DetectorConfig",
+            "from afilado.detector import crear_clasificador, preparar_entrada_clasificacion",
+            "preparar_entrada_clasificacion(np.zeros((60, 80, 3), np.uint8), 32)",
+            "cfg = AppConfig(",
+            f"    detector=DetectorConfig(tarea='classify', pesos={str(falso)!r}),",
+            "    clases=['aprobada', 'rechazada'], clases_defecto=['rechazada'])",
+            "crear_clasificador(cfg)",
+            "print('|'.join(sorted(m for m in ('torch', 'ultralytics') if m in sys.modules)))",
+        ]
+    )
+
+    salida = subprocess.run(
+        [sys.executable, "-c", guion], capture_output=True, text=True, timeout=180
+    )
+
+    assert salida.returncode == 0, salida.stderr
+    colados = salida.stdout.strip()
+    assert colados == "", (
+        f"el camino de ejecucion importo {colados}: el modo taller (setup.ps1 -Taller) "
+        "instala un entorno sin esos paquetes y la PC del taller no arrancaria"
+    )
+
+
+def test_requirements_del_taller_no_arrastran_el_entrenamiento():
+    """La lista del taller es lo unico que separa 250 MB de 2.5 GB. No puede engordar."""
+    texto = (_RAIZ / "requirements-taller.txt").read_text(encoding="utf-8")
+    lineas = [
+        linea.strip()
+        for linea in texto.splitlines()
+        if linea.strip() and not linea.strip().startswith("#")
+    ]
+
+    for linea in lineas:
+        for prohibido in ("ultralytics", "torch", "pytest", "matplotlib"):
+            assert prohibido not in linea.lower(), (
+                f"requirements-taller.txt no puede traer {prohibido}: '{linea}'"
+            )
+
+    assert any("opencv-contrib-python" in linea for linea in lineas), "falta opencv-contrib"
+    assert any(linea.lower().startswith("numpy") for linea in lineas), "falta numpy"
+    assert any(linea.lower().startswith("pyyaml") for linea in lineas), "falta pyyaml"

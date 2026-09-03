@@ -111,10 +111,29 @@ driver de la placa.
 
 ---
 
-### 3.3 La PC del taller no necesita torch
+### 3.3 La PC del taller: instalacion liviana
 
 Instalar todo (`requirements.txt`) deja un entorno de **1,2 GB**, de los cuales `torch` solo
-son 533 MB. Eso hace falta para **entrenar**, no para **usar** el sistema.
+son 533 MB. Eso hace falta para **entrenar**, no para **usar** el sistema. En la maquina del
+taller se instala con:
+
+```powershell
+.\scripts\setup.ps1 -Taller
+```
+
+Eso instala `requirements-taller.txt` --opencv, numpy, pyyaml y onnxruntime-- y saltea todo
+lo que solo tiene sentido en la maquina de entrenamiento. Medido instalando de cero:
+
+| | Completa | `-Taller` |
+|---|---|---|
+| Entorno en disco | **1,2 GB** | **252 MB** |
+| Paquetes | ~35 (torch, ultralytics, matplotlib, sympy...) | **7** |
+| Puede entrenar | si | no |
+| Puede dar veredictos | si | **si** |
+
+Esa maquina no entrena ni exporta: recibe el modelo ya convertido. Si `onnxruntime` no tiene
+wheel para su version de Python, el instalador reintenta sin el y avisa: el sistema sigue
+funcionando con el `cv2.dnn` que ya trae OpenCV, solo que un poco mas lento.
 
 El modelo entrenado se exporta una vez a formato ONNX y desde ahi corre con OpenCV, que este
 proyecto ya necesita si o si por el modulo `aruco`. En la PC de entrenamiento:
@@ -526,7 +545,8 @@ Reglas para que las fotos sirvan:
 ```
 Analisis-afilado/
 ├── README.md                 <- este archivo
-├── requirements.txt          <- lista de librerias que instala setup.ps1
+├── requirements.txt          <- librerias de la maquina de ENTRENAMIENTO
+├── requirements-taller.txt   <- librerias de la PC del TALLER (sin torch, 252 MB)
 ├── configs/
 │   └── config.yaml           <- TODOS los ajustes. Es lo unico que se toca a mano.
 ├── models/

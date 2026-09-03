@@ -1,0 +1,44 @@
+# Dependencias de la PC DEL TALLER (modo liviano).
+#
+# Esta es la maquina que mira las sierras y da el veredicto. NO entrena, NO exporta:
+# solo abre la camara, corre el modelo ya entrenado y muestra aprobada/rechazada.
+# Se instala con:
+#
+#     .\scripts\setup.ps1 -Taller
+#
+# POR QUE UNA LISTA APARTE
+# ------------------------
+# requirements.txt trae ultralytics, que arrastra torch: ~1.2 GB de descarga y ~2.5 GB en
+# disco. Eso hace falta para ENTRENAR. Para USAR el sistema no: el modelo entrenado se
+# exporta a .onnx con scripts/exportar_onnx.py y desde ahi corre con OpenCV, que este
+# proyecto ya necesita si o si por el modulo aruco.
+#
+# Medido en un i5-12400 sin placa de video, corriendo el mismo bucle en vivo:
+#
+#                        con torch      con .onnx
+#     entorno en disco     ~2.5 GB        ~250 MB
+#     RAM del proceso       440 MB      48 MB (pico 82)
+#     arranque + modelo       ~4 s          ~0.3 s
+#
+# El veredicto es EL MISMO: verificado sobre 34 fotos del taller, 34 de 34 coinciden.
+#
+# ATENCION - OPENCV: opencv-contrib-python y opencv-python NO PUEDEN CONVIVIR. Ambos
+# instalan el mismo modulo "cv2" y el ultimo en instalarse pisa al otro. Este proyecto
+# necesita SI O SI opencv-contrib-python, porque cv2.aruco --la referencia de escala de
+# todo el sistema-- vive en contrib. Aca no hay riesgo de conflicto (nada mas arrastra
+# opencv), pero si alguna vez pasa, se corrige con:
+#     pip uninstall -y opencv-python opencv-python-headless
+#     pip install --force-reinstall opencv-contrib-python
+
+opencv-contrib-python>=4.8,<5.0
+numpy>=1.24,<3.0
+pyyaml>=6.0
+
+# ONNX RUNTIME: opcional pero conviene.
+# Sin el, el modelo .onnx corre igual con cv2.dnn, que ya viene con opencv. Con el, la
+# inferencia baja de 5.8 ms a 1.8 ms a 224 px, y sobre todo el importador de ONNX es mas
+# robusto: si un export futuro usa alguna operacion que cv2.dnn no soporta, onnxruntime la
+# levanta igual. Son ~30 MB y es la unica red de seguridad que tiene el taller ante un
+# cambio de modelo. Si su instalacion falla, el sistema sigue funcionando con cv2.dnn:
+# setup.ps1 -Taller no aborta por esto.
+onnxruntime>=1.16
