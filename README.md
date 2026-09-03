@@ -237,6 +237,31 @@ El programa avisa en pantalla en rojo **"CAMARA INCLINADA"** si detecta que el m
 ve deformado. Si aparece ese cartel, la camara no esta a 90 grados: corregirla antes de
 medir nada.
 
+**Que camara usa.** Por defecto `camara.fuente` viene en **`auto`**: el programa recorre
+los indices (0 a 3) y los backends de OpenCV hasta encontrar una que **entregue imagen**, y
+avisa en el log cual eligio. No alcanza con que la camara "abra": hay drivers que abren y
+despues no entregan un solo frame, y ahi el programa arrancaba para morirse treinta frames
+mas tarde diciendo que revisaran el cable.
+
+Si dice que no puede abrir la camara, lo primero:
+
+```powershell
+python -m afilado.cli.run_live --listar-camaras
+```
+
+Eso lista lo que responde y con que indice. Los avisos en rojo de OpenCV durante la busqueda
+son normales: es el precio de preguntar por indices que no existen.
+
+> El backend tambien se prueba solo. Antes se usaba unicamente DSHOW en Windows, y hay
+> camaras --y cualquier sesion de Escritorio Remoto con la camara redirigida-- donde DSHOW
+> no abre nada y MSMF anda perfecto. Esa era la causa mas comun de "no se pudo abrir la
+> camara" con una camara sana enchufada.
+
+Para fijar una camara concreta (por ejemplo si hay dos y siempre tiene que ser la USB),
+poner el indice en vez de `auto`. Con un indice fijo el programa **no** cambia de camara por
+su cuenta --podria ser otra-- pero igual prueba los otros backends, y si falla te dice en el
+error que camaras si encontro y con que indice.
+
 **Resolucion de captura** (`camara.ancho` / `camara.alto` en el config): viene en
 **640x480**, que es lo que conviene para el modo clasificacion en una PC modesta. Es el
 costo que se paga en TODOS los frames, se clasifique o no. Medido en un i5-12400, sumando
@@ -346,7 +371,8 @@ Opciones que se pueden agregar:
 | Opcion | Para que sirve |
 |---|---|
 | `--config <ruta>` | Usar otro archivo de configuracion. |
-| `--fuente <n o ruta>` | Elegir otra camara (`--fuente 1`) o reproducir un video grabado. |
+| `--fuente <n o ruta>` | Elegir otra camara (`--fuente 1`), buscarla sola (`--fuente auto`) o reproducir un video grabado. |
+| `--listar-camaras` | Mostrar que camaras responden en esta maquina y salir. Es lo primero que hay que correr si dice que no puede abrir la camara. |
 | `--pesos <ruta.pt>` | Probar otro modelo entrenado sin tocar la configuracion. |
 | `--conf 0.9` | Subir o bajar el umbral de confianza para esta corrida. |
 | `--sin-roi` | Analizar el frame completo, sin recortar la zona util. |

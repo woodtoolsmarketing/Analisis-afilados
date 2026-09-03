@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Optional
+from typing import Optional, Sequence
 
 import cv2
 import numpy as np
@@ -56,6 +57,95 @@ _NOMBRES_BACKEND: dict[int, str] = {
 # Convencion de OpenCV para CAP_PROP_AUTO_EXPOSURE: 0.25 = manual, 0.75 = automatico.
 _EXPOSICION_MANUAL = 0.25
 
+# Backends que se prueban, EN ESTE ORDEN, cuando el config dice "auto".
+#
+# DSHOW va primero porque es el que mejor respeta CAP_PROP_FRAME_WIDTH/HEIGHT en las webcam
+# UVC: pedirle 640x480 y que entregue 640x480. Pero hay camaras y situaciones donde DSHOW
+# directamente no abre nada --una sesion de Escritorio Remoto con la camara redirigida es el
+# caso tipico-- y ahi MSMF si funciona. Probar uno solo era la diferencia entre "anda" y
+# "no se pudo abrir la camara", sin ninguna pista de por que.
+_BACKENDS_AUTO_WINDOWS: tuple[int, ...] = (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY)
+_BACKENDS_AUTO_OTROS: tuple[int, ...] = (cv2.CAP_V4L2, cv2.CAP_ANY)
+
+# Hasta que indice se busca cuando la fuente es "auto". Cuatro alcanza de sobra: en una PC
+# con webcam integrada mas una USB, la USB suele quedar en 1 o 2. Subirlo hace mas lento el
+# arranque sin ganar nada.
+_MAX_INDICE_SONDEO = 3
+
+
+@dataclass(frozen=True)
+class CamaraDetectada:
+    """Una camara que se probo y ENTREGO un frame de verdad."""
+
+    indice: int
+    backend: int
+    ancho: int
+    alto: int
+
+    @property
+    def nombre_backend(self) -> str:
+        return _NOMBRES_BACKEND.get(self.backend, str(self.backend))
+
+    def __str__(self) -> str:
+        return f"indice {self.indice} @{self.ancho}x{self.alto} ({self.nombre_backend})"
+
+
+def _backends_de_sondeo() -> tuple[int, ...]:
+    if sys.platform.startswith("win"):
+        return _BACKENDS_AUTO_WINDOWS
+    return _BACKENDS_AUTO_OTROS
+
+
+def _probar(indice: int, backend: int) -> Optional[CamaraDetectada]:
+    """Abre y LEE UN FRAME. Devuelve None si no sirve.
+
+    Que isOpened() diga True no alcanza: hay drivers que abren y despues no entregan un
+    solo frame --una camara tomada por otro programa es el caso mas comun--. La unica
+    prueba que vale es leer.
+    """
+    captura = cv2.VideoCapture(indice, backend)
+    try:
+        if not captura.isOpened():
+            return None
+        exito, frame = captura.read()
+        if not exito or frame is None:
+            return None
+        alto, ancho = frame.shape[:2]
+        return CamaraDetectada(indice=indice, backend=backend, ancho=int(ancho), alto=int(alto))
+    except cv2.error:
+        return None
+    finally:
+        captura.release()
+
+
+def enumerar_camaras(
+    max_indice: int = _MAX_INDICE_SONDEO,
+    backends: Optional[Sequence[int]] = None,
+) -> list[CamaraDetectada]:
+    """Devuelve las camaras que responden, probando indices y backends.
+
+    Se recorre por INDICE y despues por backend, de modo que el indice mas bajo gana: si la
+    misma camara responde por DSHOW y por MSMF, se informa una sola vez, con el backend
+    preferido. Para cada indice se corta en el primer backend que anda.
+
+    OpenCV imprime advertencias en rojo por cada intento fallido. Son normales: es el precio
+    de preguntar. No indican que haya nada roto.
+    """
+    a_probar = tuple(backends) if backends is not None else _backends_de_sondeo()
+    encontradas: list[CamaraDetectada] = []
+    for indice in range(max(0, int(max_indice)) + 1):
+        for backend in a_probar:
+            hallada = _probar(indice, backend)
+            if hallada is not None:
+                encontradas.append(hallada)
+                break
+    return encontradas
+
+
+def es_fuente_automatica(fuente: int | str) -> bool:
+    """True si el config pide buscar la camara sola ("auto")."""
+    return isinstance(fuente, str) and fuente.strip().lower() == "auto"
+
 
 def _resolver_fuente(fuente: int | str) -> tuple[int | str, bool]:
     """Devuelve (fuente_para_VideoCapture, es_camara).
@@ -63,10 +153,13 @@ def _resolver_fuente(fuente: int | str) -> tuple[int | str, bool]:
     Un str numerico ("0") se trata como indice de camara: es lo que llega desde la linea
     de comandos o desde el YAML sin comillas mal puestas. Un str que apunta a un archivo o
     carpeta existente se usa como video. Cualquier otro str se pasa tal cual (URL RTSP/HTTP).
+    "auto" es un caso aparte: la fuente real se decide al abrir, sondeando.
     """
     if isinstance(fuente, int):
         return fuente, True
     texto = str(fuente).strip()
+    if es_fuente_automatica(texto):
+        return "auto", True
     if texto.lstrip("+-").isdigit():
         return int(texto), True
     if Path(texto).exists():
@@ -96,20 +189,76 @@ class Camara:
     def __init__(self, cfg: CamaraConfig) -> None:
         self._cfg = cfg
         self._fuente, self._es_camara = _resolver_fuente(cfg.fuente)
+        self._auto = es_fuente_automatica(cfg.fuente)
+        # Si el config nombra un backend, se respeta y no se prueba ningun otro: alguien que
+        # escribio "msmf" a mano sabe por que lo hizo.
+        self._backend_explicito = (cfg.backend or "auto").strip().lower() != "auto"
         self._backend = _resolver_backend(cfg.backend, self._es_camara)
         self._captura: Optional[cv2.VideoCapture] = None
         self._ancho_real = 0
         self._alto_real = 0
+
+    def _backends_candidatos(self) -> tuple[int, ...]:
+        if self._backend_explicito:
+            return (self._backend,)
+        return _backends_de_sondeo()
+
+    def _candidatos(self) -> list[tuple[int, int]]:
+        """Pares (indice, backend) a probar, en orden de preferencia.
+
+        Con fuente "auto" se recorren los indices; con un indice fijo se prueba SOLO ese,
+        pero con todos los backends. Cambiar de backend es transparente --es la misma
+        camara--, cambiar de indice no: podria ser otra camara, y eso solo se hace si el
+        config lo pidio explicitamente.
+        """
+        backends = self._backends_candidatos()
+        if self._auto:
+            return [
+                (indice, backend)
+                for indice in range(_MAX_INDICE_SONDEO + 1)
+                for backend in backends
+            ]
+        return [(int(self._fuente), backend) for backend in backends]
+
+    def _abrir_camara(self) -> cv2.VideoCapture:
+        """Abre la webcam probando hasta que una ENTREGUE un frame.
+
+        Se lee un frame de prueba a proposito: isOpened() devuelve True con backends que
+        despues no entregan nada, y en ese caso el bucle en vivo arrancaria para morirse
+        treinta frames mas tarde con "la camara dejo de entregar frames", que manda a
+        revisar el cable cuando el problema era el backend.
+        """
+        pedido = (self._fuente, self._backend)
+        for indice, backend in self._candidatos():
+            captura = cv2.VideoCapture(indice, backend)
+            if captura.isOpened():
+                exito, frame = captura.read()
+                if exito and frame is not None:
+                    if (indice, backend) != pedido:
+                        _log.info(
+                            "camara encontrada en el indice %d con el backend %s "
+                            "(el config pedia %s)",
+                            indice,
+                            _NOMBRES_BACKEND.get(backend, str(backend)),
+                            "auto" if self._auto else str(pedido[0]),
+                        )
+                    self._fuente, self._backend = indice, backend
+                    return captura
+            captura.release()
+        raise RuntimeError(self._mensaje_no_abre())
 
     def abrir(self) -> None:
         """Abre la fuente y aplica la configuracion. Lanza RuntimeError si no abre."""
         if self._captura is not None and self._captura.isOpened():
             return
 
-        captura = cv2.VideoCapture(self._fuente, self._backend)
-        if not captura.isOpened():
-            captura.release()
-            raise RuntimeError(self._mensaje_no_abre())
+        if self._es_camara:
+            captura = self._abrir_camara()
+        else:
+            captura = cv2.VideoCapture(self._fuente, self._backend)
+            if not captura.isOpened():
+                captura.release()
+                raise RuntimeError(self._mensaje_no_abre())
 
         self._captura = captura
         if self._es_camara:
@@ -132,10 +281,27 @@ class Camara:
     def _mensaje_no_abre(self) -> str:
         nombre_backend = _NOMBRES_BACKEND.get(self._backend, str(self._backend))
         if self._es_camara:
+            # Antes de rendirse, mirar que hay: si el operario puso el indice equivocado,
+            # decirle cual es el bueno vale mas que mandarlo a revisar el cable.
+            otras = enumerar_camaras()
+            if otras:
+                listado = "; ".join(str(c) for c in otras)
+                if self._auto:
+                    return (
+                        "Se encontraron camaras (" + listado + ") pero ninguna entrego "
+                        "imagen al abrirla. Suele ser que otro programa la tiene tomada "
+                        "(Zoom, Teams, la app de Camara de Windows): cerralo y proba de nuevo."
+                    )
+                return (
+                    f"No se pudo abrir la camara {self._fuente}, pero SI hay camara: "
+                    f"{listado}. Corregi 'camara.fuente' en el config con ese indice, o "
+                    "poné 'auto' para que la busque sola."
+                )
             return (
-                f"No se pudo abrir la camara {self._fuente} con el backend {nombre_backend}. "
-                "Verifique que este conectada, que ningun otro programa la tenga tomada "
-                "(Zoom, Teams, la app de Camara de Windows) y que el indice sea el correcto."
+                f"No se pudo abrir la camara {self._fuente} con el backend {nombre_backend}, "
+                "y el sondeo no encontro ninguna otra. Verifique que este conectada, que "
+                "ningun otro programa la tenga tomada (Zoom, Teams, la app de Camara de "
+                "Windows) y, si es USB, que el cable haga contacto."
             )
         return (
             f"No se pudo abrir la fuente de video '{self._fuente}' con el backend "

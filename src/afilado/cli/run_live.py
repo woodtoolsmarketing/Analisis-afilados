@@ -35,7 +35,7 @@ import numpy as np
 
 from .. import overlay
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
-from ..camara import Camara
+from ..camara import Camara, enumerar_camaras
 from ..config import AppConfig, cargar_config, ruta_absoluta
 from ..detector import crear_clasificador
 from ..pipeline import Pipeline
@@ -94,6 +94,8 @@ def _es_camara(fuente: Union[int, str]) -> bool:
     if isinstance(fuente, int):
         return True
     texto = str(fuente).strip()
+    if texto.lower() == "auto":
+        return True
     if texto.lstrip("+-").isdigit():
         return True
     return False
@@ -109,7 +111,15 @@ def _construir_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fuente",
         default=None,
-        help="indice de webcam (0, 1, ...), ruta de video o URL de stream",
+        help=(
+            "indice de webcam (0, 1, ...), 'auto' para que la busque sola, ruta de video "
+            "o URL de stream"
+        ),
+    )
+    parser.add_argument(
+        "--listar-camaras",
+        action="store_true",
+        help="muestra las camaras que responden en esta maquina y termina",
     )
     parser.add_argument("--pesos", default=None, help="ruta del .pt del modelo YOLO")
     parser.add_argument(
@@ -361,12 +371,44 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
     return codigo_salida
 
 
+def _listar_camaras() -> int:
+    """Muestra las camaras que responden. Es la herramienta de diagnostico del taller.
+
+    Cuando el programa dice que no puede abrir la camara, esto contesta la unica pregunta
+    que importa: hay camara, y en que indice. OpenCV va a imprimir advertencias en rojo por
+    cada intento fallido; son normales y por eso se avisa antes.
+    """
+    print("Buscando camaras... (los avisos en rojo de OpenCV son normales)")
+    print()
+    camaras = enumerar_camaras()
+    if not camaras:
+        print("No respondio ninguna camara.")
+        print()
+        print("Cosas para revisar:")
+        print("  - que este enchufada y que el cable USB haga contacto")
+        print("  - que ningun otro programa la tenga tomada (Zoom, Teams, Camara de Windows)")
+        print("  - en una notebook, que no este desactivada por una tecla de funcion")
+        return 2
+
+    print(f"{len(camaras)} camara(s):")
+    for camara in camaras:
+        print(f"  - {camara}")
+    print()
+    print("En configs/config.yaml, la seccion camara acepta:")
+    print("    fuente: auto        <- la busca sola, es lo recomendado")
+    print(f"    fuente: {camaras[0].indice}           <- fija esta en particular")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Punto de entrada del bucle en vivo. Devuelve 0 en exito."""
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s"
     )
     args = _construir_parser().parse_args(argv)
+
+    if args.listar_camaras:
+        return _listar_camaras()
 
     try:
         cfg = cargar_config(args.config)

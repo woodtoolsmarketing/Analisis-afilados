@@ -4,8 +4,17 @@
 # un error que la nombra, para que un typo no pase por un cambio de umbral.
 
 camara:
-  # Indice de la webcam (0 = la primera) o ruta a un video/carpeta para reproducir en diferido.
-  fuente: 0
+  # De donde sale la imagen:
+  #   auto        busca la camara sola: recorre los indices y los backends hasta encontrar
+  #               una que ENTREGUE imagen. Es lo recomendado, y lo unico que funciona sin
+  #               tocar nada cuando la camara no queda en el indice 0.
+  #   0, 1, 2...  fija un indice concreto. Si ese indice falla el programa NO cambia de
+  #               camara solo (podria ser otra), pero si prueba los otros backends y, si
+  #               encuentra camaras, te dice en el error cual es el indice bueno.
+  #   una ruta    reproduce un video grabado, para probar sin camara.
+  #
+  # Para ver que hay conectado:  python -m afilado.cli.run_live --listar-camaras
+  fuente: auto
   # RESOLUCION DE CAPTURA. Es el costo que se paga en TODOS los frames, se clasifique o no:
   # decodificar el MJPG que manda la webcam, preparar la entrada de la red y dibujar el
   # overlay. Medido en un i5-12400 (ms por frame, sumando los tres pasos):
@@ -25,7 +34,11 @@ camara:
   ancho: 640
   alto: 480
   fps: 30
-  # "auto" resuelve a DSHOW en Windows y a CAP_ANY en el resto.
+  # Como habla OpenCV con la camara. "auto" prueba, EN ORDEN, DSHOW, MSMF y CAP_ANY en
+  # Windows (V4L2 y CAP_ANY en el resto) y se queda con el primero que entregue imagen.
+  # Probar uno solo era la causa mas comun de "no se pudo abrir la camara": hay camaras
+  # --y sesiones de Escritorio Remoto-- donde DSHOW no abre nada y MSMF anda perfecto.
+  # Nombrar un backend a mano ("dshow", "msmf", "v4l2") desactiva la prueba: se usa ese.
   backend: auto
   # El autofoco es el enemigo de la escala: si el lente reenfoca, el tamano aparente
   # del marcador cambia y todas las medidas en mm se corren. Dejar en false.
