@@ -11,6 +11,7 @@ Solo depende de stdlib y pyyaml: se puede importar sin torch ni ultralytics.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -124,8 +125,37 @@ _SECCIONES: dict[str, type] = {
 }
 
 
+def empaquetado() -> bool:
+    """True si el programa corre dentro de un .exe armado con PyInstaller."""
+    return bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS")
+
+
+def carpeta_del_paquete() -> Optional[Path]:
+    """Carpeta temporal donde el .exe descomprime lo que lleva adentro. None si no aplica.
+
+    Es de SOLO LECTURA a los fines practicos: en modo onefile se borra al cerrar el
+    programa. Sirve para el config por defecto que viaja dentro, nada mas.
+    """
+    if not empaquetado():
+        return None
+    return Path(str(getattr(sys, "_MEIPASS"))).resolve()
+
+
 def raiz_repo() -> Path:
-    """Devuelve la raiz del repositorio: la primera carpeta ascendente con configs/."""
+    """Carpeta base contra la que se resuelven las rutas relativas del config.
+
+    Corriendo desde el codigo: la raiz del repositorio (la primera carpeta ascendente que
+    tenga configs/).
+
+    Corriendo como .exe: la carpeta DONDE ESTA EL EJECUTABLE, no la temporal donde se
+    descomprime. Todo lo que el programa lee (el config, el modelo) y sobre todo lo que
+    ESCRIBE (data/coleccion, las fotos que archiva el operario) vive al lado del .exe. Si
+    esto devolviera la temporal, cada foto guardada se borraria al cerrar el programa y
+    nadie se enteraria hasta que fuera a buscar el dataset y no hubiera nada.
+    """
+    if empaquetado():
+        return Path(sys.executable).resolve().parent
+
     actual = Path(__file__).resolve()
     for carpeta in actual.parents:
         if (carpeta / "configs").is_dir():
@@ -241,6 +271,16 @@ def cargar_config(ruta: Optional[Union[str, Path]] = None) -> AppConfig:
     claves desconocidas o valores incoherentes.
     """
     destino = ruta_absoluta(ruta) if ruta is not None else raiz_repo() / "configs" / "config.yaml"
+
+    # Empaquetado: si no hay un config al lado del .exe, se usa el que viaja adentro. Sin
+    # esto se caeria a los valores por defecto de las dataclases, que son los de DETECCION
+    # (tarea segment, imgsz 640, cinco clases): el programa arrancaria "bien" pero haciendo
+    # otra cosa, sin un solo mensaje de error. Un config al lado del .exe sigue mandando,
+    # asi que el operario puede ajustar umbrales sin rearmar nada.
+    if ruta is None and not destino.is_file():
+        interno = carpeta_del_paquete()
+        if interno is not None and (interno / "configs" / "config.yaml").is_file():
+            destino = interno / "configs" / "config.yaml"
 
     if not destino.is_file():
         cfg = AppConfig()

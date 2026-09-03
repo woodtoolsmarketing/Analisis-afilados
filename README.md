@@ -111,7 +111,48 @@ driver de la placa.
 
 ---
 
-### 3.3 La PC del taller: instalacion liviana
+### 3.3 La PC del taller: un solo .exe, sin instalar nada
+
+La forma mas simple de llevar el sistema al taller es un ejecutable: **esa maquina no
+instala nada**, ni siquiera Python. Se le copia un archivo y se hace doble clic.
+
+En la maquina de desarrollo, desde un entorno liviano (ver 3.4):
+
+```powershell
+python scripts/construir_exe.py
+```
+
+Deja `dist\AnalisisAfilado.exe`, de unos **77 MB**. Adentro viajan el interprete de Python,
+OpenCV, onnxruntime y el config; **no** viaja el modelo.
+
+En el taller: copiar el .exe a una carpeta **con permiso de escritura** (el Escritorio
+sirve; `Archivos de programa` **no**, porque ahi no va a poder guardar las fotos) y doble
+clic. Arranca en ~2 segundos.
+
+Lo que el programa escribe y lee queda **al lado del .exe**, no adentro:
+
+```
+AnalisisAfilado.exe
+data\coleccion\aprobada\      <- las fotos que archiva el operario
+data\coleccion\rechazada\
+models\afilado_best.onnx       <- el modelo, cuando llegue
+models\afilado_best.onnx.json
+configs\config.yaml            <- opcional: si existe, pisa al que viaja adentro
+```
+
+> Esto ultimo no es un detalle. En modo un-solo-archivo, el contenido del .exe se
+> descomprime en una carpeta temporal que Windows **borra al cerrar el programa**. Si las
+> fotos se guardaran ahi, cada sesion de recoleccion se perderia sin un solo mensaje de
+> error. Por eso `config.raiz_repo()` apunta a la carpeta del ejecutable cuando detecta que
+> esta empaquetado, y hay tests que lo verifican.
+
+Sin modelo en `models\`, el .exe arranca igual en **modo recoleccion**: no da veredicto,
+pero deja archivar fotos con `a` y `r`. Es exactamente lo que hace falta al principio.
+
+### 3.4 La PC del taller: instalacion liviana (alternativa al .exe)
+
+Si preferis tener el codigo en el taller en vez de un ejecutable --por ejemplo para poder
+tocar el config comodo o actualizar con `git pull`--, esta la instalacion liviana.
 
 Instalar todo (`requirements.txt`) deja un entorno de **1,2 GB**, de los cuales `torch` solo
 son 533 MB. Eso hace falta para **entrenar**, no para **usar** el sistema. En la maquina del
@@ -556,6 +597,8 @@ Analisis-afilado/
 ├── scripts/
 │   ├── setup.ps1             <- instalador
 │   ├── exportar_onnx.py      <- convierte el .pt en .onnx para la PC del taller
+│   ├── construir_exe.py      <- arma AnalisisAfilado.exe para el taller
+│   ├── lanzador_taller.py    <- punto de entrada de ese .exe
 │   └── make_aruco.py         <- genera el marcador para imprimir
 ├── src/afilado/              <- el programa (no tocar)
 │   ├── config.py             <- lee configs/config.yaml

@@ -7,6 +7,7 @@ nunca se aplico.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,8 @@ from afilado.config import (
     FiltrosConfig,
     RoiConfig,
     cargar_config,
+    carpeta_del_paquete,
+    empaquetado,
     guardar_config,
     raiz_repo,
     ruta_absoluta,
@@ -378,3 +381,99 @@ def test_config_del_repo_es_valida() -> None:
 
     assert cfg.clases
     assert set(cfg.clases_defecto) <= set(cfg.clases)
+
+
+# ---------------------------------------------------------------------------
+# Comportamiento EMPAQUETADO (.exe armado con PyInstaller).
+#
+# Adentro de un .exe, __file__ apunta a una carpeta temporal que Windows borra
+# al cerrar el programa. Si las rutas se resolvieran contra ella, cada foto que
+# archiva el operario se perderia al salir, en silencio, y nadie se enteraria
+# hasta ir a buscar el dataset y encontrarlo vacio.
+#
+# Se simula el entorno congelado en vez de armar un .exe de verdad: la suite
+# tiene que correr en segundos y sin PyInstaller instalado.
+# ---------------------------------------------------------------------------
+
+
+def _fingir_exe(monkeypatch, carpeta_exe: Path, carpeta_paquete: Path) -> None:
+    """Deja el proceso como si estuviera corriendo dentro de un .exe de PyInstaller."""
+    ejecutable = carpeta_exe / "AnalisisAfilado.exe"
+    ejecutable.parent.mkdir(parents=True, exist_ok=True)
+    ejecutable.write_bytes(b"")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(carpeta_paquete), raising=False)
+    monkeypatch.setattr(sys, "executable", str(ejecutable))
+
+
+def test_sin_empaquetar_no_se_cree_empaquetado() -> None:
+    assert empaquetado() is False
+    assert carpeta_del_paquete() is None
+
+
+def test_empaquetado_resuelve_todo_contra_la_carpeta_del_exe(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Lo que el programa escribe va al lado del .exe, no a la temporal del paquete."""
+    carpeta_exe = tmp_path / "escritorio"
+    paquete = tmp_path / "temporal_meipass"
+    paquete.mkdir()
+    _fingir_exe(monkeypatch, carpeta_exe, paquete)
+
+    assert empaquetado() is True
+    assert carpeta_del_paquete() == paquete.resolve()
+    assert raiz_repo() == carpeta_exe.resolve()
+    assert ruta_absoluta("data/coleccion") == (carpeta_exe / "data" / "coleccion").resolve()
+    assert ruta_absoluta("models/afilado_best.onnx") != (
+        paquete / "models" / "afilado_best.onnx"
+    )
+
+
+def test_empaquetado_usa_el_config_que_viaja_adentro(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Sin config al lado del .exe se usa el de adentro, NO los valores por defecto.
+
+    Caer a los defaults significaria arrancar en modo deteccion, a 640 px y con otras
+    clases: el programa funcionaria, haciendo otra cosa, sin un solo mensaje de error.
+    """
+    carpeta_exe = tmp_path / "escritorio"
+    paquete = tmp_path / "temporal_meipass"
+    (paquete / "configs").mkdir(parents=True)
+    (paquete / "configs" / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "detector": {"tarea": "classify", "imgsz": 224, "clasificar_cada_n_frames": 5},
+                "clases": ["aprobada", "rechazada"],
+                "clases_defecto": ["rechazada"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _fingir_exe(monkeypatch, carpeta_exe, paquete)
+
+    cfg = cargar_config(None)
+
+    assert cfg.detector.tarea == "classify"
+    assert cfg.detector.imgsz == 224
+    assert cfg.detector.clasificar_cada_n_frames == 5
+    assert cfg.clases == ["aprobada", "rechazada"]
+
+
+def test_un_config_al_lado_del_exe_le_gana_al_de_adentro(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """El operario tiene que poder ajustar umbrales sin rearmar el ejecutable."""
+    carpeta_exe = tmp_path / "escritorio"
+    paquete = tmp_path / "temporal_meipass"
+    (paquete / "configs").mkdir(parents=True)
+    (paquete / "configs" / "config.yaml").write_text(
+        yaml.safe_dump({"detector": {"confianza": 0.80}}), encoding="utf-8"
+    )
+    _fingir_exe(monkeypatch, carpeta_exe, paquete)
+    (carpeta_exe / "configs").mkdir(parents=True, exist_ok=True)
+    (carpeta_exe / "configs" / "config.yaml").write_text(
+        yaml.safe_dump({"detector": {"confianza": 0.55}}), encoding="utf-8"
+    )
+
+    assert cargar_config(None).detector.confianza == 0.55
