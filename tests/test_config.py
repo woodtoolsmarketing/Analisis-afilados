@@ -106,6 +106,7 @@ def test_el_yaml_guardado_usa_claves_en_espanol(tmp_path: Path) -> None:
         "detector",
         "filtros",
         "feedback",
+        "interfaz",
         "clases",
         "clases_defecto",
     }

@@ -1,0 +1,149 @@
+"""Pruebas de la pantalla de revision (la del microscopio).
+
+No abren ninguna ventana: `componer` devuelve la imagen y el mapa de botones, y todo lo que
+importa se puede comprobar sobre eso. Lo que se prueba es lo que romperia la pantalla en el
+taller sin que nadie lo note al mirarla de reojo: botones que se pisan entre si, botones que
+se salen del lienzo, y el clic que cae en el boton equivocado.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from afilado import revision
+from afilado.config import AppConfig
+from afilado.tipos import Veredicto
+
+_RAIZ = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def cfg() -> AppConfig:
+    return AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+
+
+def _imagen(ancho: int = 800, alto: int = 600) -> np.ndarray:
+    return np.full((alto, ancho, 3), 120, np.uint8)
+
+
+def _rects_se_solapan(a, b) -> bool:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return ax1 < bx2 and bx1 < ax2 and ay1 < by2 and by1 < ay2
+
+
+@pytest.mark.parametrize("congelado", [False, True])
+def test_los_botones_no_se_pisan_entre_si(cfg: AppConfig, congelado: bool) -> None:
+    """Dos botones superpuestos significan que un clic puede guardar la clase equivocada."""
+    estado = revision.EstadoRevision(congelado=congelado, capturas=12)
+
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, estado)
+
+    rects = list(pantalla.botones.values())
+    for i, primero in enumerate(rects):
+        for segundo in rects[i + 1 :]:
+            assert not _rects_se_solapan(primero, segundo), pantalla.botones
+
+
+@pytest.mark.parametrize("congelado", [False, True])
+def test_los_botones_entran_en_el_lienzo(cfg: AppConfig, congelado: bool) -> None:
+    """Un boton dibujado fuera del lienzo no se ve, pero igual acepta clics: peor todavia."""
+    estado = revision.EstadoRevision(congelado=congelado, capturas=3)
+
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, estado)
+    alto, ancho = pantalla.imagen.shape[:2]
+
+    for nombre, (x1, y1, x2, y2) in pantalla.botones.items():
+        assert 0 <= x1 < x2 <= ancho, f"{nombre} se sale a lo ancho"
+        assert 0 <= y1 < y2 <= alto, f"{nombre} se sale a lo alto"
+
+
+def test_el_clic_cae_en_el_boton_que_se_ve(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True)
+
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, estado)
+
+    for nombre, (x1, y1, x2, y2) in pantalla.botones.items():
+        centro = ((x1 + x2) // 2, (y1 + y2) // 2)
+        assert pantalla.boton_en(*centro) == nombre
+    assert pantalla.boton_en(0, 0) is None
+
+
+def test_en_vivo_solo_se_puede_revisar_o_salir(cfg: AppConfig) -> None:
+    """Antes de congelar no hay nada que guardar: ofrecerlo invitaria a archivar una foto
+    movida, que es basura para el dataset."""
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, revision.EstadoRevision())
+
+    assert set(pantalla.botones) == {"revisar", "salir"}
+
+
+def test_congelado_aparecen_los_de_guardar(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True)
+
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, estado)
+
+    assert set(pantalla.botones) == {"seguir", "aprobada", "rechazada", "salir"}
+
+
+def test_sin_referencia_no_explota_y_avisa(cfg: AppConfig) -> None:
+    """El dia 1 no hay foto de referencia y el programa tiene que arrancar igual."""
+    estado = revision.EstadoRevision(referencia_faltante=True)
+
+    pantalla = revision.componer(_imagen(), None, cfg, estado)
+
+    assert pantalla.imagen.shape[1] == revision.ANCHO_LIENZO
+    assert "revisar" in pantalla.botones
+
+
+@pytest.mark.parametrize(
+    "forma", [(600, 800, 3), (480, 640, 3), (1080, 1920, 3), (600, 800), (240, 320, 3)]
+)
+def test_anda_con_cualquier_resolucion_de_camara(cfg: AppConfig, forma) -> None:
+    """El microscopio da 800x600, una webcam 640x480, otra 1920x1080. Todas tienen que
+    entrar en el mismo lienzo sin deformarse ni desbordar."""
+    pantalla = revision.componer(np.zeros(forma, np.uint8), _imagen(), cfg, revision.EstadoRevision())
+
+    assert pantalla.imagen.shape[1] == revision.ANCHO_LIENZO
+    assert pantalla.imagen.shape[0] > 0
+
+
+def test_no_se_toca_la_imagen_que_entra(cfg: AppConfig) -> None:
+    """La foto que se archiva tiene que ser la de la camara, sin un pixel dibujado encima."""
+    vivo = _imagen()
+    copia = vivo.copy()
+
+    revision.componer(vivo, _imagen(), cfg, revision.EstadoRevision(congelado=True))
+
+    assert np.array_equal(vivo, copia)
+
+
+def test_el_encaje_respeta_la_proporcion() -> None:
+    """Estirar la imagen para llenar el panel haria comparar un diente deformado contra una
+    referencia sin deformar."""
+    ancha = np.zeros((100, 400, 3), np.uint8)
+    ancha[:, :] = 200
+
+    panel = revision._encajar(ancha, 200, 200)
+
+    assert panel.shape == (200, 200, 3)
+    # con 4:1 metido en un cuadrado, arriba y abajo tienen que quedar bandas negras
+    assert int(panel[0].max()) == 0
+    assert int(panel[-1].max()) == 0
+    assert int(panel[100].max()) > 0
+
+
+def test_los_textos_de_pantalla_no_llevan_acentos() -> None:
+    """cv2.putText usa fuentes Hershey, que NO tienen acentos: cada tilde sale como '?'.
+
+    Es un error facil de cometer y dificil de ver en una revision de codigo, porque el
+    codigo se lee perfecto y solo se rompe en la pantalla del taller.
+    """
+    for nombre in ("revision.py", "overlay.py"):
+        texto = (_RAIZ / "src" / "afilado" / nombre).read_text(encoding="utf-8")
+        raros = sorted({c for c in texto if ord(c) > 127})
+
+        assert not raros, f"{nombre} tiene caracteres que cv2.putText no sabe dibujar: {raros}"

@@ -382,7 +382,43 @@ El programa arranca en el modo que diga `detector.tarea` en el config. Hoy esta 
 **`classify`** (veredicto aprobada/rechazada). Los otros modos (`detect`, `segment`) sirven para
 la etapa de medicion con ArUco, mas adelante.
 
-### 5.1 Modo clasificacion (el actual): veredicto de la sierra
+### 5.1 Modo revision (el actual): microscopio y boton REVISAR
+
+Es la pantalla pensada para el **microscopio USB**. Se activa con `interfaz.modo: revision`
+en el config, que es como viene.
+
+La pantalla se parte en dos: a la izquierda lo que ve la camara **en vivo**, a la derecha la
+foto de una pieza **aprobada** para comparar a ojo. Abajo, un boton **REVISAR**.
+
+**El programa no juzga solo.** El operario acomoda el diente, lo enfoca, y recien cuando
+esta conforme aprieta REVISAR (o la barra espaciadora, o hace clic). Ahi se congela ESE
+frame y se analiza. Queda una foto quieta con su veredicto, que se puede mirar con calma.
+
+> Esto es a proposito y es la diferencia con el modo clasico. Con el microscopio la imagen
+> solo sirve cuando la pieza esta bien puesta: juzgar todos los frames seria juzgar sobre
+> todo imagenes movidas y a medio encuadrar. Un veredicto que parpadea es un veredicto que
+> el operario aprende a ignorar, y ahi se perdio la herramienta de control.
+
+| Tecla | Boton | Que hace |
+|---|---|---|
+| `espacio` | **REVISAR** | Congela lo que se ve y lo analiza. |
+| `espacio` | **OTRA PIEZA** | Descongela y vuelve al vivo, para la siguiente. |
+| `a` | **GUARDAR APROBADA** | Archiva la foto congelada como aprobada. |
+| `r` | **GUARDAR RECHAZADA** | Archiva la foto congelada como rechazada. |
+| `f` | — | Toma lo que se ve **como la foto de referencia** y la deja fija a la derecha. |
+| `q` o `ESC` | **SALIR** | Cierra el programa. |
+
+Todo tiene tecla **y** boton: si en alguna maquina el mouse no responde bien dentro de la
+ventana de OpenCV, el teclado sigue funcionando.
+
+**El dia 1 no hay foto de referencia** y el panel derecho lo dice, con la instruccion:
+poner una pieza aprobada bajo el microscopio y apretar `f`. Queda guardada en la ruta que
+diga `interfaz.referencia_aprobada` y ya aparece siempre.
+
+Sin modelo entrenado, la banda de arriba avisa que todavia no hay veredicto, pero `a` y `r`
+archivan igual: es el modo recoleccion, y es lo que hay que hacer al principio.
+
+### 5.1.bis Modo clasificacion: veredicto continuo sobre la sierra entera
 
 La pantalla muestra una banda grande arriba con el veredicto: 🟩 **APROBADA** o 🟥 **RECHAZADA**,
 con el porcentaje de confianza. Debajo, las probabilidades de cada clase (para ver si quedo al limite).

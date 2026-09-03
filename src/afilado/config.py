@@ -88,6 +88,17 @@ class FiltrosConfig:
     iteraciones_morfologicas: int = 1
 
 
+MODOS_INTERFAZ: frozenset[str] = frozenset({"clasico", "revision"})
+
+
+@dataclass
+class InterfazConfig:
+    """Como se ve el programa en vivo."""
+
+    modo: str = "clasico"
+    referencia_aprobada: str = "data/referencia/microscopio/aprobada.jpg"
+
+
 @dataclass
 class FeedbackConfig:
     """Destino y formato de las capturas del bucle de auto-entrenamiento."""
@@ -109,6 +120,7 @@ class AppConfig:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     filtros: FiltrosConfig = field(default_factory=FiltrosConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
+    interfaz: InterfazConfig = field(default_factory=InterfazConfig)
     clases: list[str] = field(default_factory=lambda: list(CLASES_POR_DEFECTO))
     clases_defecto: list[str] = field(
         default_factory=lambda: list(CLASES_DEFECTO_POR_DEFECTO)
@@ -122,6 +134,7 @@ _SECCIONES: dict[str, type] = {
     "detector": DetectorConfig,
     "filtros": FiltrosConfig,
     "feedback": FeedbackConfig,
+    "interfaz": InterfazConfig,
 }
 
 
@@ -251,6 +264,12 @@ def _validar(cfg: AppConfig) -> None:
         raise ValueError(
             f"filtros.kernel_morfologico debe ser impar y >= 1, se recibio {kernel}. "
             "Un kernel par no tiene pixel central y desplazaria la mascara."
+        )
+
+    if cfg.interfaz.modo not in MODOS_INTERFAZ:
+        validos = ", ".join(sorted(MODOS_INTERFAZ))
+        raise ValueError(
+            f"interfaz.modo debe ser uno de: {validos}. Se recibio '{cfg.interfaz.modo}'."
         )
 
     if not cfg.clases:
