@@ -60,6 +60,11 @@ class EstadoRevision:
     mensaje: Optional[str] = None
     capturas: int = 0
     referencia_faltante: bool = False
+    # Nombre del modelo de referencia que se esta mostrando, y cual es de cuantos. Sin esto
+    # el operario no sabe contra que esta comparando, que con varios modelos cargados es
+    # justamente lo que necesita saber.
+    nombre_referencia: Optional[str] = None
+    posicion_referencia: tuple[int, int] = (0, 0)
 
 
 @dataclass
@@ -645,12 +650,22 @@ def componer_simple(
         etiquetas.append(("REVISAR", rect, _AZUL))
 
     ancho_salir, _ = tipografia.medir("SALIR", 21, negrita=True)
-    rect_salir = _boton_lindo(
-        lienzo, ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON, y1, y2,
-        "SALIR", _SUPERFICIE,
-    )
+    x_salir = ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON
+    rect_salir = _boton_lindo(lienzo, x_salir, y1, y2, "SALIR", _SUPERFICIE)
     botones["salir"] = rect_salir
     etiquetas.append(("SALIR", rect_salir, _SUPERFICIE))
+
+    # Cambiar de modelo solo tiene sentido si hay mas de uno cargado. Se ubica pegado a
+    # SALIR, calculando hacia la izquierda, para que no choque con los de guardar.
+    if estado.posicion_referencia[1] > 1:
+        texto_modelo = "OTRO MODELO"
+        ancho_mod, _ = tipografia.medir(texto_modelo, 21, negrita=True)
+        x_mod = x_salir - 12 - ancho_mod - 2 * _RELLENO_BOTON
+        ocupado = max((r[2] for r in botones.values() if r[0] < x_mod), default=0)
+        if x_mod > ocupado + 12:
+            rect_mod = _boton_lindo(lienzo, x_mod, y1, y2, texto_modelo, _SUPERFICIE)
+            botones["modelo"] = rect_mod
+            etiquetas.append((texto_modelo, rect_mod, _SUPERFICIE))
 
     rect_mensaje = None
     if estado.mensaje:
@@ -663,13 +678,19 @@ def componer_simple(
 
     # ---------------- texto, todo de una pasada ----------------
     with tipografia.Pincel(lienzo) as pincel:
-        for x, titulo_col in ((x_izq, "SIERRA"), (x_der, "MODELO APROBADO")):
+        titulo_modelo = "MODELO APROBADO"
+        if estado.nombre_referencia:
+            titulo_modelo = f"MODELO: {estado.nombre_referencia.upper()}"
+            cual, cuantos = estado.posicion_referencia
+            if cuantos > 1:
+                titulo_modelo += f"   ({cual} de {cuantos})"
+        for x, titulo_col in ((x_izq, "SIERRA"), (x_der, titulo_modelo)):
             ancho_t, alto_t = tipografia.medir(titulo_col, 20, negrita=True)
             pincel.texto(titulo_col, (x + (ancho_panel - ancho_t) // 2,
                                       alto_cabecera - alto_t - 12), _TEXTO_TENUE, 20, True)
 
         if referencia is None:
-            for i, linea in enumerate(("Falta la foto del modelo.", "",
+            for i, linea in enumerate(("No hay fotos de modelo.", "",
                                        "Pone una pieza buena", "y apreta la tecla  f")):
                 if linea:
                     pincel.texto(linea, (x_der + 26, y_panel + 52 + i * 34), _TEXTO_TENUE, 20)

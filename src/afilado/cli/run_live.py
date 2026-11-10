@@ -35,6 +35,7 @@ import cv2
 import numpy as np
 
 from .. import overlay, revision
+from ..referencias import GaleriaReferencias
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara, enumerar_camaras
 from ..config import AppConfig, cargar_config, ruta_absoluta
@@ -465,30 +466,6 @@ def _ajustar_ventana(ventana: str, ancho: int, alto: int) -> None:
         _registro.debug("no se pudo redimensionar la ventana: %s", error)
 
 
-def _cargar_referencia(cfg: AppConfig) -> Optional[np.ndarray]:
-    """Lee la foto de la pieza aprobada que se muestra al lado. None si todavia no hay."""
-    ruta = ruta_absoluta(cfg.interfaz.referencia_aprobada)
-    if not ruta.is_file():
-        _registro.warning(
-            "no hay foto de referencia en %s; se puede sacar con la tecla 'f'", ruta
-        )
-        return None
-    imagen = cv2.imread(str(ruta))
-    if imagen is None:
-        _registro.warning("la foto de referencia %s no se pudo leer", ruta)
-        return None
-    return imagen
-
-
-def _fijar_referencia(cfg: AppConfig, frame: np.ndarray) -> Path:
-    """Guarda el frame actual como la nueva referencia aprobada."""
-    ruta = ruta_absoluta(cfg.interfaz.referencia_aprobada)
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(ruta), frame, [cv2.IMWRITE_JPEG_QUALITY, cfg.feedback.calidad_jpg]):
-        raise OSError(f"no se pudo escribir {ruta}")
-    return ruta
-
-
 def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     """Modo revision: el operario encuadra, aprieta REVISAR, y recien ahi se juzga.
 
@@ -501,7 +478,17 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     almacen = AlmacenClasificacion(_DIR_COLECCION, cfg.clases, cfg.feedback.calidad_jpg)
     teclas_clase = _clases_de_teclas(cfg)
     fuente_es_camara = _es_camara(cfg.camara.fuente)
-    referencia = _cargar_referencia(cfg)
+    galeria = GaleriaReferencias(cfg.interfaz.referencia_aprobada, cfg.feedback.calidad_jpg)
+    if galeria.cantidad == 0:
+        _registro.warning(
+            "no hay fotos de modelo en %s; sacala con la tecla 'f'", galeria.carpeta
+        )
+    else:
+        _registro.info(
+            "%d foto(s) de modelo en %s (tecla 'm' para cambiar)",
+            galeria.cantidad,
+            galeria.carpeta,
+        )
     # El bucle es el mismo en los dos modos --encuadrar, REVISAR, congelar, juzgar--; lo
     # unico que cambia es como se dibuja. "simple" es la pantalla del taller.
     # El lienzo se arma para entrar en la pantalla: si se deja que OpenCV lo escale, la
@@ -531,7 +518,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     )
     _registro.info("archivando fotos en: %s", ruta_absoluta(_DIR_COLECCION))
     _registro.info(
-        "espacio o clic en REVISAR analiza | a/r guardan la pieza | f fija la referencia | q sale"
+        "espacio o clic en REVISAR analiza | a/r guardan la pieza | "
+        "f agrega foto de modelo | m cambia de modelo | q sale"
     )
 
     # Los clics llegan por un callback de OpenCV, que corre fuera del bucle: se encolan y se
@@ -547,7 +535,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     codigo_salida = 0
     nulos_seguidos = 0
     ventana_ajustada = False
-    estado = revision.EstadoRevision(referencia_faltante=referencia is None)
+    estado = revision.EstadoRevision()
     vivo: Optional[np.ndarray] = None
     congelado: Optional[np.ndarray] = None
     expira_mensaje = 0.0
@@ -582,6 +570,10 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 estado.mensaje = None
 
             a_mostrar = congelado if estado.congelado and congelado is not None else vivo
+            referencia = galeria.imagen_actual()
+            estado.referencia_faltante = referencia is None
+            estado.nombre_referencia = galeria.nombre_actual
+            estado.posicion_referencia = galeria.posicion
             pantalla = componer(a_mostrar, referencia, cfg, estado)
             cv2.imshow(_VENTANA, pantalla.imagen)
             if not ventana_ajustada:
@@ -606,6 +598,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 accion = teclas_clase[tecla]
             elif tecla == ord("f"):
                 accion = "referencia"
+            elif tecla == ord("m"):
+                accion = "modelo"
 
             if accion is None:
                 continue
@@ -625,13 +619,25 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             elif accion == "referencia":
                 base = congelado if estado.congelado and congelado is not None else vivo
                 try:
-                    ruta = _fijar_referencia(cfg, base)
-                    referencia = base.copy()
-                    estado.referencia_faltante = False
-                    estado.mensaje = f"REFERENCIA GUARDADA: {ruta.name}"
+                    ruta = galeria.agregar(base)
+                    estado.mensaje = f"MODELO AGREGADO: {ruta.stem}"
+                    _registro.info(
+                        "nueva foto de modelo en %s (renombrala con el modelo de sierra "
+                        "para reconocerla despues)",
+                        ruta,
+                    )
                 except OSError as error:
-                    _registro.error("no se pudo guardar la referencia: %s", error)
-                    estado.mensaje = "ERROR AL GUARDAR LA REFERENCIA"
+                    _registro.error("no se pudo guardar la foto de modelo: %s", error)
+                    estado.mensaje = "ERROR AL GUARDAR - revise el disco"
+                expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+            elif accion == "modelo":
+                # Se relee la carpeta antes de pasar al siguiente: asi aparecen las fotos
+                # que alguien haya copiado ahi con el programa abierto, sin reiniciar.
+                galeria.recargar()
+                nombre = galeria.siguiente()
+                estado.mensaje = (
+                    f"MODELO: {nombre}" if nombre else "NO HAY FOTOS DE MODELO"
+                )
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             elif accion in cfg.clases:
                 base = congelado if estado.congelado and congelado is not None else vivo

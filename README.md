@@ -432,8 +432,30 @@ microscopio y se vea como se porta.
 | `espacio` | **OTRA PIEZA** | Vuelve al vivo. |
 | `a` | **GUARDAR BUENA** | Archiva la foto congelada como aprobada. |
 | `r` | **GUARDAR MALA** | Archiva la foto congelada como rechazada. |
-| `f` | — | Toma lo que se ve como **foto del modelo**. |
+| `f` | — | **Agrega** lo que se ve como una foto de modelo nueva. |
+| `m` | **OTRO MODELO** | Pasa a la siguiente foto de modelo. |
 | `q` | **SALIR** | Cierra. |
+
+#### Las fotos de modelo
+
+El panel derecho no es una sola foto: es una **carpeta** con una por cada modelo de sierra,
+porque cada uno tiene su geometria de diente y comparar un LU3F-0300 contra un R01 no dice
+nada. Arriba del panel se ve cual esta cargada y cuantas hay: `MODELO: LU3F-0300  (1 de 3)`.
+
+- **Sacar una nueva**: poner la pieza buena bajo el microscopio y apretar `f`. **Agrega** una
+  foto, no pisa las que ya estaban. Se guarda con la fecha y hora como nombre.
+- **Ponerle nombre**: entrar a la carpeta y renombrar el archivo con el modelo de sierra.
+  Ese nombre es el que aparece en pantalla.
+- **Elegir entre varias**: tecla `m` o boton **OTRO MODELO**, que van rotando. El boton solo
+  aparece si hay mas de una.
+- **Ordenarlas**: se ciclan por orden alfabetico, asi que numerarlas (`01-LU3F.jpg`,
+  `02-R01.jpg`) alcanza para fijar en que orden aparecen.
+- **Copiarlas desde otra PC**: se pueden dejar directamente en la carpeta, incluso con el
+  programa abierto; al apretar `m` se relee la carpeta y aparecen.
+
+La carpeta la define `interfaz.referencia_aprobada` en el config. El programa recuerda cual
+estaba elegida la ultima vez, asi que quien trabaja todo el dia con el mismo modelo no tiene
+que buscarlo en cada arranque.
 
 Los otros dos modos siguen disponibles en `interfaz.modo`: **`revision`** es la misma
 pantalla partida pero con la banda de veredicto arriba y el detalle por clase, y

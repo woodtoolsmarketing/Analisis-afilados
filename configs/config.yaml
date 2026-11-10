@@ -126,10 +126,25 @@ interfaz:
   # "clasico"  sin pantalla partida: la banda sobre la imagen en vivo, juzgando todos los
   #            frames. Es el modo de la webcam cenital, anterior al microscopio.
   modo: simple
-  # Foto de una pieza aprobada, la que se muestra al lado para comparar. Si no existe, el
-  # programa avisa en pantalla y sigue funcionando. Se puede sacar en el momento con la
-  # tecla 'f': congela lo que se ve y lo guarda como referencia.
-  referencia_aprobada: data/referencia/microscopio/aprobada.jpg
+  # CARPETA con las fotos de pieza aprobada, una por modelo de sierra. Se muestra al lado
+  # para que el operario compare a ojo.
+  #
+  # Cada modelo tiene su geometria de diente, asi que comparar un LU3F-0300 contra la foto
+  # de un R01 no dice nada. Por eso es una carpeta y no un archivo: se tienen todas las que
+  # hagan falta y se cambia entre ellas con la tecla 'm' o el boton OTRO MODELO.
+  #
+  #   - el NOMBRE del archivo es el que se muestra en pantalla. Conviene ponerle el modelo
+  #     de sierra: LU3F-0300.jpg, R01.jpg...
+  #   - el ORDEN en que se ciclan es el alfabetico, asi que numerarlas (01-..., 02-...)
+  #     alcanza para fijarlo.
+  #   - la tecla 'f' AGREGA una foto nueva (no pisa las anteriores) con la fecha y hora
+  #     como nombre; despues se la renombra con el modelo que corresponda.
+  #   - se recuerda cual estaba elegida la ultima vez, en un archivo .ultima adentro de la
+  #     carpeta. Si se borra, vuelve a arrancar por la primera.
+  #
+  # Tambien se acepta la ruta de UN archivo, que es lo que tenian los configs anteriores:
+  # en ese caso se usa su carpeta como galeria y ese archivo queda preseleccionado.
+  referencia_aprobada: data/referencia/microscopio
   # A partir de que coincidencia se da por APROBADO. 0.70 = 70%.
   #
   # QUE MIDE ESTE NUMERO: cuanta probabilidad le da el modelo a que la pieza sea de las
