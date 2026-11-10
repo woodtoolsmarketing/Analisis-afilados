@@ -438,3 +438,56 @@ def test_sin_evaluar_en_vivo_sigue_diciendo_esperando(cfg: AppConfig) -> None:
     titulo, detalle, _, _ = revision.estado_resultado(revision.EstadoRevision(), cfg)
 
     assert titulo == "ESPERANDO" and "REVISAR" in detalle
+
+
+# ---------------------------------------------------------------------------
+# MODO RECOLECCION: sin modelo entrenado. El programa no juzga, pero sigue
+# siendo util --se compara a ojo contra la foto de modelo y se archiva con
+# a/r-- y el medidor de foco importa MAS que con modelo: una foto movida que
+# entra al dataset queda etiquetada como buena o mala sin que se vea nada.
+# ---------------------------------------------------------------------------
+
+
+def test_sin_modelo_no_se_inventa_un_veredicto(cfg: AppConfig) -> None:
+    """Un veredicto fabricado es peor que ninguno: el operario no puede saber que no valia.
+
+    Paso de verdad en el taller. El modelo que viajaba en el paquete estaba entrenado con
+    fotos cenitales de la sierra entera, y sobre primeros planos de microscopio devolvia
+    numeros al azar: 62%, 58%, 49%, 38%, 25% sobre cinco fotos de la misma pieza bien
+    puesta. La pantalla mostraba DESAPROBADO 36% con las dos imagenes practicamente
+    iguales.
+    """
+    estado = revision.EstadoRevision(congelado=True, veredicto=None)
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "SIN MODELO"
+    assert aprobado is None, "sin modelo no se aprueba ni se desaprueba"
+
+
+def test_sin_modelo_pero_enfocado_avisa_que_falta_el_modelo(cfg: AppConfig) -> None:
+    """Con la nitidez ya medida en vivo, el cartel no puede volver a 'apriete REVISAR'."""
+    estado = revision.EstadoRevision(esperando_foco=False, nitidez=95.0, veredicto=None)
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert (titulo, aprobado) == ("SIN MODELO", None)
+
+
+def test_sin_modelo_el_medidor_de_foco_sigue_avisando(cfg: AppConfig) -> None:
+    """Es el unico aviso que queda para no archivar una foto movida."""
+    estado = revision.EstadoRevision(esperando_foco=True, nitidez=9.0, veredicto=None)
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "ENFOCANDO" and aprobado is None
+    assert "9" in detalle, "tiene que mostrar la nitidez medida"
+
+
+def test_sin_modelo_la_pantalla_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, veredicto=None)
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
+
+    assert not _color_pintado(pantalla, revision._VERDE_OK)
+    assert not _color_pintado(pantalla, revision._ROJO_NO)

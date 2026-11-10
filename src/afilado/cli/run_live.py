@@ -579,7 +579,12 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 nulos_seguidos = 0
                 vivo = frame
 
-                if en_vivo and clasificador is not None and not estado.congelado:
+                if en_vivo and not estado.congelado:
+                    # La nitidez se mide SIEMPRE, con modelo o sin el. Sin modelo el
+                    # programa no juzga, pero el operario esta juntando el dataset con
+                    # a/r, y una foto movida que entra al dataset es una muestra
+                    # envenenada: queda etiquetada como buena o mala cuando en realidad
+                    # no se ve nada. El medidor de foco es justo lo que hace falta ahi.
                     estado.nitidez = revision.nitidez(vivo)
                     if estado.nitidez < float(cfg.interfaz.nitidez_minima):
                         # Imagen movida o fuera de foco: no se opina. Y se reinicia la
@@ -590,7 +595,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                         clase_candidata, repeticiones = None, 0
                     else:
                         estado.esperando_foco = False
-                        if frames_vistos % cada_n_frames == 0:
+                        if clasificador is not None and frames_vistos % cada_n_frames == 0:
                             nuevo = clasificador.clasificar(vivo)
                             if nuevo is not None:
                                 if nuevo.clase == clase_candidata:
