@@ -80,6 +80,12 @@ _INTENTOS_LECTURA_SONDEO = 8
 # siguiente. Sin esto el sondeo cuelga el dispositivo que acaba de probar.
 _PAUSA_ENTRE_SONDEOS = 0.35
 
+# Cuanto se espera antes de reintentar cuando NINGUNA camara respondio. El microscopio USB
+# necesita unos segundos entre que un programa lo suelta y otro lo toma: el caso tipico es
+# cerrar HiView y abrir este programa enseguida.
+_ESPERA_REINTENTO = 3.0
+_REINTENTOS_APERTURA = 2
+
 
 @dataclass(frozen=True)
 class CamaraDetectada:
@@ -243,7 +249,22 @@ class Camara:
         return [(int(self._fuente), backend) for backend in backends]
 
     def _abrir_camara(self) -> cv2.VideoCapture:
-        """Abre la webcam probando hasta que una ENTREGUE un frame.
+        """Abre la webcam, reintentando si ninguna responde todavia."""
+        for intento in range(_REINTENTOS_APERTURA + 1):
+            captura = self._intentar_abrir()
+            if captura is not None:
+                return captura
+            if intento < _REINTENTOS_APERTURA:
+                _log.info(
+                    "ninguna camara entrego imagen; se reintenta en %.0f s "
+                    "(si venis de cerrar otro programa que la usaba, necesita unos segundos)",
+                    _ESPERA_REINTENTO,
+                )
+                time.sleep(_ESPERA_REINTENTO)
+        raise RuntimeError(self._mensaje_no_abre())
+
+    def _intentar_abrir(self) -> Optional[cv2.VideoCapture]:
+        """Una pasada por todos los candidatos. Devuelve None si ninguno entrego imagen.
 
         Se lee un frame de prueba a proposito: isOpened() devuelve True con backends que
         despues no entregan nada, y en ese caso el bucle en vivo arrancaria para morirse
@@ -275,7 +296,7 @@ class Camara:
                     self._fuente, self._backend = indice, backend
                     return captura
             captura.release()
-        raise RuntimeError(self._mensaje_no_abre())
+        return None
 
     def abrir(self) -> None:
         """Abre la fuente y aplica la configuracion. Lanza RuntimeError si no abre."""

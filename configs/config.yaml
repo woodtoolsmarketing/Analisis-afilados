@@ -57,17 +57,31 @@ camara:
   # El microscopio USB entrega una imagen casi negra con los valores de fabrica, aun con su
   # anillo de LEDs prendido. Medido sobre un diente real:
   #
-  #     sin tocar nada        brillo medio  13.5 / 255   7% de la imagen en negro puro
-  #     brillo 64             brillo medio  89.0         0% en negro
-  #     brillo 64 + gan 64    brillo medio 143.7         el doble de nitidez, 0.2% quemado
+  # LA GANANCIA ES LA QUE DA DETALLE; el brillo solo corre el nivel. Barrido completo
+  # sobre un diente real con la luz del microscopio prendida (nitidez = varianza Laplace):
+  #
+  #     brillo  gan | medio  quemado  nitidez
+  #          0    0 |  16.1     0.0%       10    inservible, 44% en negro puro
+  #          0   64 |  81.1     0.0%       95    bien
+  #         16   64 | 109.2     0.6%       95    EL MEJOR
+  #         32   64 | 136.2     5.7%       89    empieza a quemar
+  #         64   64 | 182.6    24.4%       61    un cuarto quemado, se pierde el filo
+  #         64   32 | 121.7     0.0%       43    bien expuesta pero sin detalle
+  #
+  # Quemar es tan malo como oscurecer: a partir del 5% de pixeles en 255 la nitidez CAE,
+  # porque el detalle del filo se funde en blanco. Por eso no se busca la imagen mas
+  # brillante sino la que mas detalle conserva.
   #
   # Los dos topean en 64 en esta camara: pedirle mas devuelve 64 y el programa lo avisa.
   # Se tocan en el SENSOR, no despues: asi la foto que se archiva para reentrenar ya sale
-  # bien expuesta. Estirarla por software despues solo amplificaria el ruido de una imagen
-  # que nunca tuvo la informacion.
+  # bien expuesta. Estirarla por software solo amplificaria el ruido de una imagen que
+  # nunca tuvo la informacion.
+  #
+  # OJO: estos valores dependen de la intensidad de la lampara del microscopio. Si se
+  # cambia la luz, hay que rehacer el barrido.
   #
   # Con una webcam comun y luz de taller, dejar los dos en null.
-  brillo: 64
+  brillo: 16
   ganancia: 64
   voltear_horizontal: false
 
