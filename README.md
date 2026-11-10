@@ -403,9 +403,35 @@ Se activa con `interfaz.modo: simple`, que es como viene.
   [REVISAR]                                   [SALIR]
 ```
 
-El operario encuadra el diente, aprieta **REVISAR** (barra espaciadora o clic), y el cartel
-de abajo dice **APROBADO** en verde o **DESAPROBADO** en rojo. Nada mas: ni porcentajes por
-clase, ni nombres de modelo, ni jerga.
+El cartel de abajo dice **APROBADO** en verde o **DESAPROBADO** en rojo. Nada mas: ni
+porcentajes por clase, ni nombres de modelo, ni jerga.
+
+#### Evaluacion en vivo
+
+Por defecto (`interfaz.evaluar_en_vivo: true`) **el veredicto se actualiza solo** mientras
+se mueve la pieza, sin apretar nada. REVISAR pasa a congelar la imagen con su veredicto,
+para mirarla con calma o archivarla.
+
+Juzgar cada frame tiene dos riesgos, y los dos estan atendidos:
+
+**Opinar sobre una imagen que no sirve.** Antes de clasificar se mide el foco --la varianza
+del laplaciano--. Si no llega a `interfaz.nitidez_minima`, el cartel dice **ENFOCANDO** en
+ambar y **muestra la nitidez medida**, asi se ajusta el umbral mirando el numero en vez de a
+ciegas. Medido sobre una foto real del microscopio: enfocada 94,6; con un desenfoque minimo
+7,1; movida, entre 11 y 25. El valor depende de la camara, asi que con otra hay que volver a
+mirar el numero y ajustar.
+
+**Parpadear entre aprobado y rechazado.** El cartel solo cambia cuando
+`interfaz.frames_para_confirmar` evaluaciones seguidas dan lo mismo. Verificado con un
+clasificador que alterna a proposito en cada llamada: con 1 el cartel cambia 29 veces en 30
+frames; con 3, ninguna. Con una imagen quieta y un veredicto estable, confirma en 3
+evaluaciones.
+
+Si la pieza se mueve, el veredicto anterior **se borra** en vez de quedar en pantalla:
+mostrar un resultado que ya no describe lo que se ve es peor que no mostrar nada.
+
+Con `evaluar_en_vivo: false` el programa no opina hasta que se aprieta REVISAR. Conviene si
+la camara mira una zona donde pasa gente o herramientas.
 
 #### Que significa ese porcentaje
 

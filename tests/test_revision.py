@@ -357,3 +357,84 @@ def test_al_achicar_se_sacrifican_los_recuadros_no_el_resultado(cfg: AppConfig) 
     assert (grande.imagen.shape[0] - chica.imagen.shape[0]) == pytest.approx(
         900 - 560, abs=revision._ALTO_FIJO_SIMPLE
     )
+
+
+# ---------------------------------------------------------------------------
+# EVALUACION EN VIVO. El veredicto se actualiza solo, sin apretar nada, y eso
+# trae dos riesgos que estos tests cubren: opinar sobre una imagen movida, y
+# parpadear entre aprobado y rechazado con cada temblor de la mano.
+# ---------------------------------------------------------------------------
+
+
+def test_la_nitidez_cae_con_el_desenfoque() -> None:
+    """Es la medida con la que se decide si vale la pena opinar.
+
+    Medido sobre una foto real del microscopio: enfocada 94.6, con un desenfoque de 3x3
+    baja a 7.1. Aca se reproduce esa caida sobre una imagen sintetica con textura.
+    """
+    rng = np.random.default_rng(7)
+    textura = rng.integers(0, 255, (200, 200, 3), dtype=np.uint8)
+
+    enfocada = revision.nitidez(textura)
+    borrosa = revision.nitidez(cv2.GaussianBlur(textura, (9, 9), 0))
+
+    assert enfocada > borrosa * 5, f"enfocada {enfocada:.0f}, borrosa {borrosa:.0f}"
+
+
+def test_una_imagen_plana_no_tiene_nitidez() -> None:
+    """Una pared lisa o la tapa puesta: nada que enfocar, nada sobre que opinar."""
+    assert revision.nitidez(np.full((100, 100, 3), 128, np.uint8)) < 1.0
+
+
+def test_enfocando_no_da_veredicto(cfg: AppConfig) -> None:
+    """Mientras la imagen no sirve, el cartel no puede decir aprobado ni desaprobado.
+
+    Mostrar un veredicto sobre una foto movida es peor que no mostrar nada: el operario
+    no tiene forma de saber que lo que vio no valia.
+    """
+    estado = revision.EstadoRevision(esperando_foco=True, nitidez=8.0)
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "ENFOCANDO"
+    assert aprobado is None
+    assert color == revision._AMBAR
+    assert "8" in detalle and "30" in detalle, "tiene que mostrar el numero medido y el minimo"
+
+
+def test_enfocando_le_gana_a_un_veredicto_viejo(cfg: AppConfig) -> None:
+    """Si la pieza se movio, el veredicto anterior ya no describe lo que se ve."""
+    estado = revision.EstadoRevision(
+        esperando_foco=True, nitidez=5.0, veredicto=_veredicto(0.99)
+    )
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "ENFOCANDO" and aprobado is None
+
+
+def test_en_vivo_con_foco_si_da_veredicto(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        esperando_foco=False, nitidez=95.0, veredicto=_veredicto(0.9)
+    )
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO" and aprobado is True
+
+
+def test_el_cartel_de_enfocando_se_dibuja(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(esperando_foco=True, nitidez=12.0)
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
+
+    assert _color_pintado(pantalla, revision._AMBAR)
+    assert not _color_pintado(pantalla, revision._VERDE_OK)
+    assert not _color_pintado(pantalla, revision._ROJO_NO)
+
+
+def test_sin_evaluar_en_vivo_sigue_diciendo_esperando(cfg: AppConfig) -> None:
+    """El modo a pedido no cambia: sin nitidez medida, el cartel espera el boton."""
+    titulo, detalle, _, _ = revision.estado_resultado(revision.EstadoRevision(), cfg)
+
+    assert titulo == "ESPERANDO" and "REVISAR" in detalle

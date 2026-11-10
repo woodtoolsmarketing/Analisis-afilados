@@ -65,6 +65,10 @@ class EstadoRevision:
     # justamente lo que necesita saber.
     nombre_referencia: Optional[str] = None
     posicion_referencia: tuple[int, int] = (0, 0)
+    # Evaluacion en vivo: la nitidez medida del frame actual y si se esta esperando que la
+    # imagen se enfoque. Con None se dibuja como siempre (modo a pedido).
+    nitidez: Optional[float] = None
+    esperando_foco: bool = False
 
 
 @dataclass
@@ -538,6 +542,25 @@ def _barra_coincidencia(
     cv2.line(img, (marca, y - 5), (marca, y + alto + 5), _TEXTO, 2, cv2.LINE_AA)
 
 
+def nitidez(frame: np.ndarray) -> float:
+    """Cuan enfocada esta la imagen: varianza del laplaciano.
+
+    Es la medida clasica de foco y aca separa muy bien. Medido sobre una foto real del
+    microscopio:
+
+        enfocada                        94.6
+        con un desenfoque de 3x3         7.1    (trece veces menos)
+        movida 3 px                     24.7
+        movida 7 px                     11.5
+
+    Sirve para no opinar sobre una imagen que no da para opinar. El valor absoluto depende
+    de la camara y de lo que se este mirando, por eso el umbral es configurable y la
+    pantalla muestra el numero medido cuando no alcanza: asi se ajusta mirando, no a ciegas.
+    """
+    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    return float(cv2.Laplacian(gris, cv2.CV_64F).var())
+
+
 def estado_resultado(
     estado: EstadoRevision, cfg: AppConfig
 ) -> tuple[str, str, tuple, Optional[bool]]:
@@ -545,7 +568,15 @@ def estado_resultado(
 
     Aparte para poder probar la DECISION sin tener que leer pixeles de una imagen.
     """
-    if not estado.congelado:
+    if estado.esperando_foco:
+        detalle = "acerque o enfoque la pieza"
+        if estado.nitidez is not None:
+            detalle = (
+                f"nitidez {estado.nitidez:.0f}, hace falta "
+                f"{cfg.interfaz.nitidez_minima:.0f}"
+            )
+        return "ENFOCANDO", detalle, _AMBAR, None
+    if not estado.congelado and estado.veredicto is None and estado.nitidez is None:
         return "ESPERANDO", "apriete REVISAR", _SUPERFICIE, None
     valor = coincidencia(estado.veredicto, cfg)
     if valor is None:

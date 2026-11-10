@@ -517,8 +517,15 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         clasificador.descripcion if clasificador else "SIN MODELO (modo recoleccion)",
     )
     _registro.info("archivando fotos en: %s", ruta_absoluta(_DIR_COLECCION))
+    if cfg.interfaz.evaluar_en_vivo:
+        _registro.info(
+            "evaluacion EN VIVO: nitidez minima %.0f, %d evaluaciones seguidas para "
+            "confirmar un veredicto",
+            cfg.interfaz.nitidez_minima,
+            cfg.interfaz.frames_para_confirmar,
+        )
     _registro.info(
-        "espacio o clic en REVISAR analiza | a/r guardan la pieza | "
+        "espacio o clic en REVISAR congela | a/r guardan la pieza | "
         "f agrega foto de modelo | m cambia de modelo | q sale"
     )
 
@@ -536,6 +543,15 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     nulos_seguidos = 0
     ventana_ajustada = False
     estado = revision.EstadoRevision()
+    # Evaluacion en vivo: se clasifica cada N frames, pero el veredicto que se MUESTRA solo
+    # cambia cuando varias evaluaciones seguidas coinciden. Sin esa confirmacion el cartel
+    # parpadea entre aprobado y rechazado con cada temblor de la mano, y un cartel que
+    # parpadea es un cartel que el operario deja de mirar.
+    en_vivo = bool(cfg.interfaz.evaluar_en_vivo)
+    cada_n_frames = cfg.detector.clasificar_cada_n_frames
+    frames_vistos = 0
+    clase_candidata: Optional[str] = None
+    repeticiones = 0
     vivo: Optional[np.ndarray] = None
     congelado: Optional[np.ndarray] = None
     expira_mensaje = 0.0
@@ -562,6 +578,28 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     continue
                 nulos_seguidos = 0
                 vivo = frame
+
+                if en_vivo and clasificador is not None and not estado.congelado:
+                    estado.nitidez = revision.nitidez(vivo)
+                    if estado.nitidez < float(cfg.interfaz.nitidez_minima):
+                        # Imagen movida o fuera de foco: no se opina. Y se reinicia la
+                        # confirmacion, para que al volver el foco no se arrastre un
+                        # veredicto formado con frames que ya no valen.
+                        estado.esperando_foco = True
+                        estado.veredicto = None
+                        clase_candidata, repeticiones = None, 0
+                    else:
+                        estado.esperando_foco = False
+                        if frames_vistos % cada_n_frames == 0:
+                            nuevo = clasificador.clasificar(vivo)
+                            if nuevo is not None:
+                                if nuevo.clase == clase_candidata:
+                                    repeticiones += 1
+                                else:
+                                    clase_candidata, repeticiones = nuevo.clase, 1
+                                if repeticiones >= int(cfg.interfaz.frames_para_confirmar):
+                                    estado.veredicto = nuevo
+                    frames_vistos += 1
 
             if vivo is None:
                 continue
@@ -609,12 +647,20 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             if accion == "revisar":
                 congelado = vivo.copy()
                 estado.congelado = True
-                estado.veredicto = (
-                    clasificador.clasificar(congelado) if clasificador else None
-                )
+                estado.esperando_foco = False
+                # En vivo ya hay un veredicto confirmado para esta imagen: se congela ese,
+                # en vez de volver a clasificar y arriesgar que salga otro distinto justo
+                # al apretar el boton.
+                if not (en_vivo and estado.veredicto is not None):
+                    estado.veredicto = (
+                        clasificador.clasificar(congelado) if clasificador else None
+                    )
             elif accion == "seguir":
                 estado.congelado = False
                 estado.veredicto = None
+                estado.nitidez = None
+                estado.esperando_foco = False
+                clase_candidata, repeticiones = None, 0
                 congelado = None
             elif accion == "referencia":
                 base = congelado if estado.congelado and congelado is not None else vivo

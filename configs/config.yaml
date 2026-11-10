@@ -160,6 +160,31 @@ interfaz:
   # buenas, bajarlo. Conviene ajustarlo recien cuando haya un modelo entrenado con fotos
   # del microscopio y se vea como se porta.
   umbral_aprobacion: 0.70
+  # EVALUAR EN VIVO: el veredicto se actualiza solo mientras se mueve la pieza, sin apretar
+  # nada. REVISAR pasa a CONGELAR la imagen con su veredicto, para mirarla con calma o
+  # archivarla.
+  #
+  # Con false, el programa no opina hasta que se aprieta REVISAR. Conviene si la camara
+  # mira una zona donde pasa gente o herramientas, para que no juzgue cualquier cosa.
+  evaluar_en_vivo: true
+  # Que tan enfocada tiene que estar la imagen para que el programa se anime a opinar.
+  # Es la varianza del laplaciano; medido sobre una foto real del microscopio:
+  #
+  #     enfocada                  94.6
+  #     desenfoque de 3x3          7.1      trece veces menos
+  #     movida 3 px               24.7
+  #     movida 7 px               11.5
+  #
+  # Por debajo del umbral la pantalla dice ENFOCANDO y MUESTRA LA NITIDEZ MEDIDA, para que
+  # se pueda ajustar este numero mirando en vez de a ciegas. Con 0 se apaga el control.
+  #
+  # El valor absoluto depende de la camara y de lo que se mire: con otra camara hay que
+  # volver a mirar el numero que aparece en pantalla y ajustar.
+  nitidez_minima: 30
+  # Cuantas evaluaciones seguidas tienen que dar lo mismo antes de cambiar el cartel. Con 1
+  # el veredicto parpadea con cada temblor de la mano, y un cartel que parpadea es un cartel
+  # que el operario deja de mirar.
+  frames_para_confirmar: 3
 
 detector:
   # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:

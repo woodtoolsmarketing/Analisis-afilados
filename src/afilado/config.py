@@ -100,6 +100,9 @@ class InterfazConfig:
     modo: str = "clasico"
     referencia_aprobada: str = "data/referencia/microscopio/aprobada.jpg"
     umbral_aprobacion: float = 0.70
+    evaluar_en_vivo: bool = False
+    nitidez_minima: float = 30.0
+    frames_para_confirmar: int = 3
 
 
 @dataclass
@@ -267,6 +270,18 @@ def _validar(cfg: AppConfig) -> None:
         raise ValueError(
             f"filtros.kernel_morfologico debe ser impar y >= 1, se recibio {kernel}. "
             "Un kernel par no tiene pixel central y desplazaria la mascara."
+        )
+
+    if float(cfg.interfaz.nitidez_minima) < 0.0:
+        raise ValueError(
+            "interfaz.nitidez_minima no puede ser negativa, se recibio "
+            f"{cfg.interfaz.nitidez_minima}. Con 0 se apaga el control de foco."
+        )
+    if int(cfg.interfaz.frames_para_confirmar) < 1:
+        raise ValueError(
+            "interfaz.frames_para_confirmar debe ser >= 1, se recibio "
+            f"{cfg.interfaz.frames_para_confirmar}. Con 1 el veredicto cambia con cada "
+            "evaluacion y parpadea."
         )
 
     if not 0.0 < float(cfg.interfaz.umbral_aprobacion) <= 1.0:
