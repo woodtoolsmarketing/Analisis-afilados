@@ -284,3 +284,56 @@ def test_el_modo_simple_anda_con_cualquier_camara(cfg: AppConfig, forma) -> None
     )
 
     assert pantalla.imagen.shape[1] == revision.ANCHO_LIENZO
+
+
+@pytest.mark.parametrize("alto_maximo", [900, 672, 600, 520])
+def test_el_lienzo_entra_en_la_pantalla_que_se_le_diga(cfg: AppConfig, alto_maximo: int) -> None:
+    """El lienzo se arma para ENTRAR, en vez de dejar que la ventana lo escale.
+
+    Si no entra, OpenCV estira la imagen al ancho de la ventana y la fila de botones queda
+    cortada abajo. Un boton que no se ve pero igual recibe clics es peor que no tenerlo.
+    """
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(0.9))
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado, alto_maximo)
+
+    alto = pantalla.imagen.shape[0]
+    assert alto <= alto_maximo, f"el lienzo mide {alto} y el maximo era {alto_maximo}"
+    mas_bajo = max(rect[3] for rect in pantalla.botones.values())
+    assert mas_bajo <= alto, "hay un boton dibujado fuera del lienzo"
+
+
+@pytest.mark.parametrize("alto_maximo", [400, 200, 1])
+def test_por_debajo_del_piso_la_pantalla_no_se_achica_mas(
+    cfg: AppConfig, alto_maximo: int
+) -> None:
+    """Hay un piso: el cartel y los botones se respetan enteros aunque el monitor sea chico.
+
+    Achicarlos para entrar en cualquier pantalla dejaria la herramienta sin lo unico que
+    justifica esta pantalla: un resultado legible de lejos y botones que se puedan apretar.
+    """
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(0.9))
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado, alto_maximo)
+
+    assert pantalla.imagen.shape[0] == revision.ALTO_MINIMO_LIENZO
+    mas_bajo = max(rect[3] for rect in pantalla.botones.values())
+    assert mas_bajo <= pantalla.imagen.shape[0]
+
+
+def test_al_achicar_se_sacrifican_los_recuadros_no_el_resultado(cfg: AppConfig) -> None:
+    """Lo que se achica es la imagen de la camara; el cartel y los botones no se tocan."""
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(0.9))
+
+    grande = revision.componer_simple(_imagen(), _imagen(), cfg, estado, 900)
+    chica = revision.componer_simple(_imagen(), _imagen(), cfg, estado, 560)
+
+    alto_boton_grande = grande.botones["seguir"][3] - grande.botones["seguir"][1]
+    alto_boton_chica = chica.botones["seguir"][3] - chica.botones["seguir"][1]
+
+    assert alto_boton_grande == alto_boton_chica, "se achicaron los botones"
+    assert chica.imagen.shape[0] < grande.imagen.shape[0], "no se achico nada"
+    # la diferencia entera salio de los recuadros, no de las franjas fijas
+    assert (grande.imagen.shape[0] - chica.imagen.shape[0]) == pytest.approx(
+        900 - 560, abs=revision._ALTO_FIJO_SIMPLE
+    )

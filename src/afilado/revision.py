@@ -414,16 +414,41 @@ def _cartel_resultado(
     )
 
 
+# Todo lo que ocupa el lienzo ADEMAS de los recuadros de imagen: titulos, la palabra
+# RESULTADO, el cartel y la fila de botones. Se usa para despejar cuanto alto le queda a los
+# recuadros cuando hay que entrar en una pantalla chica.
+_ALTO_FIJO_SIMPLE = _ALTO_TITULO + _MARGEN + 34 + _ALTO_RESULTADO + _MARGEN + 70
+
+# Por debajo de esto los recuadros no muestran nada util: antes que seguir achicandolos
+# --o peor, achicar el cartel de resultado y los botones, que es lo que hay que leer y
+# apretar-- la pantalla se queda en este piso aunque el monitor sea mas chico.
+_ALTO_MINIMO_PANEL = 180
+
+# Alto minimo del lienzo del modo simple. Es el piso real: pedirle menos no lo achica mas.
+ALTO_MINIMO_LIENZO = _ALTO_FIJO_SIMPLE + _ALTO_MINIMO_PANEL
+
+
 def componer_simple(
     vivo: np.ndarray,
     referencia: Optional[np.ndarray],
     cfg: AppConfig,
     estado: EstadoRevision,
+    alto_maximo: Optional[int] = None,
 ) -> Pantalla:
-    """La pantalla del taller: la sierra, el modelo, y abajo el resultado en dos palabras."""
+    """La pantalla del taller: la sierra, el modelo, y abajo el resultado en dos palabras.
+
+    `alto_maximo` es el alto de pantalla disponible. Si el lienzo no entra, se achican los
+    RECUADROS --nunca el cartel de resultado ni los botones, que son lo que hay que leer y
+    apretar--. Asi la imagen se dibuja 1 a 1 y no la reescala la ventana, que es lo que
+    dejaba la fila de botones cortada.
+    """
     ancho_panel = (ANCHO_LIENZO - 3 * _MARGEN) // 2
     alto_img, ancho_img = vivo.shape[:2]
     alto_panel = max(220, int(ancho_panel * alto_img / max(1, ancho_img)))
+
+    if alto_maximo is not None:
+        disponible = int(alto_maximo) - _ALTO_FIJO_SIMPLE
+        alto_panel = max(_ALTO_MINIMO_PANEL, min(alto_panel, disponible))
 
     alto_total = (
         _ALTO_TITULO + alto_panel + _MARGEN + 34 + _ALTO_RESULTADO + _MARGEN + 70

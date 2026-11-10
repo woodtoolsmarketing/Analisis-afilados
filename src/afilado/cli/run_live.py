@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Union
@@ -400,6 +401,65 @@ def _listar_camaras() -> int:
     return 0
 
 
+def _tamano_pantalla() -> Optional[tuple[int, int]]:
+    """(ancho, alto) del escritorio, o None si no se puede averiguar.
+
+    Sin dependencias nuevas: ctypes es de la biblioteca estandar. Fuera de Windows se
+    devuelve None y la ventana se abre del tamano del lienzo sin recortar.
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+
+        usuario = ctypes.windll.user32
+        usuario.SetProcessDPIAware()
+
+        # SPI_GETWORKAREA da el escritorio SIN la barra de tareas, que es lo que de verdad
+        # hay disponible: en este monitor son 1360x720 contra los 1360x768 de la pantalla,
+        # y esos 48 px son los que se comerian los botones de abajo.
+        class _Rect(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        area = _Rect()
+        if usuario.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0):
+            ancho = int(area.right - area.left)
+            alto = int(area.bottom - area.top)
+        else:
+            ancho = int(usuario.GetSystemMetrics(0))
+            alto = int(usuario.GetSystemMetrics(1))
+    except Exception:  # noqa: BLE001 - si falla, se sigue sin recortar
+        return None
+    if ancho <= 0 or alto <= 0:
+        return None
+    return ancho, alto
+
+
+# Alto que se le va el marco de la ventana y la barra de titulo, que no son area de dibujo.
+_ALTO_MARCO_VENTANA = 48
+
+
+def _alto_util_pantalla() -> Optional[int]:
+    """Alto en px que puede ocupar el DIBUJO, descontando marco y barra de tareas."""
+    pantalla = _tamano_pantalla()
+    if pantalla is None:
+        return None
+    return max(240, pantalla[1] - _ALTO_MARCO_VENTANA)
+
+
+def _ajustar_ventana(ventana: str, ancho: int, alto: int) -> None:
+    """Deja la ventana justo del tamano del lienzo, sin que OpenCV tenga que reescalar."""
+    try:
+        cv2.resizeWindow(ventana, ancho, alto)
+    except cv2.error as error:  # algun backend de GUI puede no soportarlo
+        _registro.debug("no se pudo redimensionar la ventana: %s", error)
+
+
 def _cargar_referencia(cfg: AppConfig) -> Optional[np.ndarray]:
     """Lee la foto de la pieza aprobada que se muestra al lado. None si todavia no hay."""
     ruta = ruta_absoluta(cfg.interfaz.referencia_aprobada)
@@ -439,9 +499,16 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     referencia = _cargar_referencia(cfg)
     # El bucle es el mismo en los dos modos --encuadrar, REVISAR, congelar, juzgar--; lo
     # unico que cambia es como se dibuja. "simple" es la pantalla del taller.
-    componer = (
-        revision.componer_simple if cfg.interfaz.modo == "simple" else revision.componer
-    )
+    # El lienzo se arma para entrar en la pantalla: si se deja que OpenCV lo escale, la
+    # fila de botones queda cortada abajo.
+    alto_util = _alto_util_pantalla()
+    if cfg.interfaz.modo == "simple":
+
+        def componer(vivo, referencia, cfg, estado):  # type: ignore[no-redef]
+            return revision.componer_simple(vivo, referencia, cfg, estado, alto_util)
+
+    else:
+        componer = revision.componer  # type: ignore[assignment]
 
     camara = Camara(cfg.camara)
     try:
@@ -474,6 +541,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
 
     codigo_salida = 0
     nulos_seguidos = 0
+    ventana_ajustada = False
     estado = revision.EstadoRevision(referencia_faltante=referencia is None)
     vivo: Optional[np.ndarray] = None
     congelado: Optional[np.ndarray] = None
@@ -511,6 +579,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             a_mostrar = congelado if estado.congelado and congelado is not None else vivo
             pantalla = componer(a_mostrar, referencia, cfg, estado)
             cv2.imshow(_VENTANA, pantalla.imagen)
+            if not ventana_ajustada:
+                # Recien aca se sabe cuanto mide el lienzo: depende de la resolucion que
+                # haya negociado la camara.
+                _ajustar_ventana(_VENTANA, pantalla.imagen.shape[1], pantalla.imagen.shape[0])
+                ventana_ajustada = True
 
             tecla = cv2.waitKey(30) & 0xFF
             accion: Optional[str] = None
