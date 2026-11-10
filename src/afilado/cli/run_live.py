@@ -380,6 +380,7 @@ def _listar_camaras() -> int:
     cada intento fallido; son normales y por eso se avisa antes.
     """
     print("Buscando camaras... (los avisos en rojo de OpenCV son normales)")
+    print("Puede tardar unos segundos: se prueba indice por indice, con pausas.")
     print()
     camaras = enumerar_camaras()
     if not camaras:
@@ -394,6 +395,10 @@ def _listar_camaras() -> int:
     print(f"{len(camaras)} camara(s):")
     for camara in camaras:
         print(f"  - {camara}")
+    print()
+    print("Si despues de esto alguna camara deja de responder, desenchufala y volve a")
+    print("enchufarla: hay camaras USB baratas que se cuelgan cuando se las abre y cierra")
+    print("varias veces seguidas. Windows las sigue mostrando como OK igual.")
     print()
     print("En configs/config.yaml, la seccion camara acepta:")
     print("    fuente: auto        <- la busca sola, es lo recomendado")

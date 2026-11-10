@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -72,6 +73,13 @@ _BACKENDS_AUTO_OTROS: tuple[int, ...] = (cv2.CAP_V4L2, cv2.CAP_ANY)
 # arranque sin ganar nada.
 _MAX_INDICE_SONDEO = 3
 
+# Cuantas veces se insiste en leer un frame antes de descartar una camara que abrio.
+_INTENTOS_LECTURA_SONDEO = 8
+
+# Segundos de respiro despues de cerrar una camara que SI se abrio, antes de tocar la
+# siguiente. Sin esto el sondeo cuelga el dispositivo que acaba de probar.
+_PAUSA_ENTRE_SONDEOS = 0.35
+
 
 @dataclass(frozen=True)
 class CamaraDetectada:
@@ -104,11 +112,19 @@ def _probar(indice: int, backend: int) -> Optional[CamaraDetectada]:
     prueba que vale es leer.
     """
     captura = cv2.VideoCapture(indice, backend)
+    abierta = captura.isOpened()
     try:
-        if not captura.isOpened():
+        if not abierta:
             return None
-        exito, frame = captura.read()
-        if not exito or frame is None:
+        # Estas camaras tardan varios frames en entregar el primero: leer una sola vez y
+        # darla por muerta deja afuera camaras que funcionan perfecto.
+        frame = None
+        for _ in range(_INTENTOS_LECTURA_SONDEO):
+            exito, leido = captura.read()
+            if exito and leido is not None:
+                frame = leido
+                break
+        if frame is None:
             return None
         alto, ancho = frame.shape[:2]
         return CamaraDetectada(indice=indice, backend=backend, ancho=int(ancho), alto=int(alto))
@@ -116,6 +132,12 @@ def _probar(indice: int, backend: int) -> Optional[CamaraDetectada]:
         return None
     finally:
         captura.release()
+        if abierta:
+            # Abrir y cerrar seguido CUELGA a estas camaras: dejan de entregar frames en
+            # todas las resoluciones hasta que pasan unos segundos. Verificado con el
+            # microscopio del taller. Esta pausa es el precio de poder sondear sin romper
+            # lo que se esta sondeando.
+            time.sleep(_PAUSA_ENTRE_SONDEOS)
 
 
 def enumerar_camaras(
@@ -232,7 +254,15 @@ class Camara:
         for indice, backend in self._candidatos():
             captura = cv2.VideoCapture(indice, backend)
             if captura.isOpened():
-                exito, frame = captura.read()
+                # Se insiste varias veces, igual que en el sondeo. El microscopio USB del
+                # taller tarda hasta media docena de frames en entregar el primero: leer una
+                # sola vez descartaba una camara que funciona perfecto, y el programa
+                # terminaba diciendo "no se pudo abrir" con la camara sana y enchufada.
+                exito, frame = False, None
+                for _ in range(_INTENTOS_LECTURA_SONDEO):
+                    exito, frame = captura.read()
+                    if exito and frame is not None:
+                        break
                 if exito and frame is not None:
                     if (indice, backend) != pedido:
                         _log.info(
@@ -265,6 +295,7 @@ class Camara:
             self._aplicar_formato()
             self._aplicar_enfoque()
             self._aplicar_exposicion()
+            self._aplicar_brillo_y_ganancia()
         self._releer_resolucion()
 
         if self._es_camara and (
@@ -348,6 +379,41 @@ class Camara:
                 "La camara no acepta fijar la exposicion en %s por software.",
                 self._cfg.exposicion,
             )
+
+    def _aplicar_brillo_y_ganancia(self) -> None:
+        """Sube brillo y ganancia si el config los pide.
+
+        En el microscopio USB del taller la imagen llega casi negra con los valores de
+        fabrica --brillo medio 13 sobre 255, con el 7% de la imagen en negro puro-- y el
+        detalle del filo, que es lo unico que importa, queda enterrado. Con brillo 64 sube a
+        89 y agregando ganancia 64 llega a 144, con el doble de nitidez medida y sin quemar.
+
+        Son controles del sensor, no un ajuste de la imagen despues: lo que se guarda para
+        reentrenar ya sale bien expuesto. Corregirlo en software despues solo estiraria el
+        ruido de una imagen que nunca tuvo la informacion.
+        """
+        assert self._captura is not None
+        for nombre, propiedad, valor in (
+            ("brillo", cv2.CAP_PROP_BRIGHTNESS, self._cfg.brillo),
+            ("ganancia", cv2.CAP_PROP_GAIN, self._cfg.ganancia),
+        ):
+            if valor is None:
+                continue
+            if not self._captura.set(propiedad, float(valor)):
+                _log.warning(
+                    "La camara no acepta fijar %s en %s por software.", nombre, valor
+                )
+                continue
+            leido = self._captura.get(propiedad)
+            # Estas camaras clampean en silencio: piden 192 y se quedan en 64. Decirlo
+            # evita media hora de subir el numero esperando que cambie algo.
+            if leido >= 0 and abs(leido - float(valor)) > 1.0:
+                _log.info(
+                    "La camara limito %s a %.0f (se pidio %s): es su maximo.",
+                    nombre,
+                    leido,
+                    valor,
+                )
 
     def _releer_resolucion(self) -> None:
         """Lee la resolucion realmente entregada (puede diferir de la pedida)."""

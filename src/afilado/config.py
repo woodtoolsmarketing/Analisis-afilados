@@ -36,6 +36,8 @@ class CamaraConfig:
     autofocus: bool = False
     enfoque: Optional[int] = None
     exposicion: Optional[float] = None
+    brillo: Optional[int] = None
+    ganancia: Optional[int] = None
     voltear_horizontal: bool = False
 
 
