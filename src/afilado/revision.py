@@ -313,3 +313,210 @@ def componer(
         )
 
     return Pantalla(imagen=lienzo, botones=botones)
+
+
+# ---------------------------------------------------------------------------
+# MODO SIMPLE: dos recuadros y un cartel RESULTADO enorme abajo.
+#
+# Pensado para que lo lea cualquiera, de un vistazo y desde lejos: sin
+# porcentajes por clase, sin nombres de modelo, sin jerga. Dos palabras.
+# ---------------------------------------------------------------------------
+
+_ALTO_RESULTADO = 150     # el cartel de abajo, el elemento mas grande de la pantalla
+_ALTO_TITULO = 42         # la franja con SIERRA / MODELO APROBADO
+
+
+def coincidencia(veredicto: Optional[Veredicto], cfg: AppConfig) -> Optional[float]:
+    """Cuanto se parece la pieza a una APROBADA, entre 0 y 1. None si no hay veredicto.
+
+    QUE ES: la probabilidad que el modelo le da al conjunto de clases sanas. Como se lo
+    entreno con fotos de piezas aprobadas y rechazadas, ese numero se lee como "cuanto se
+    parece esto a las piezas buenas".
+
+    QUE NO ES: una comparacion pixel a pixel contra la foto de referencia. Esa comparacion
+    estaria dominada por la luz y el encuadre, no por el estado del filo --dos fotos del
+    mismo diente con distinta iluminacion dan muy distinto, y dos dientes distintos con la
+    misma luz dan casi igual--, y devolveria un porcentaje con cara de dato que no mide
+    nada. La foto de referencia esta para que la compare el ojo del operario.
+
+    Se suman TODAS las clases sanas, no solo la primera, para que siga andando si algun dia
+    el esquema pasa de aprobada/rechazada a varios defectos con nombre propio.
+    """
+    if veredicto is None:
+        return None
+    sanas = [c for c in cfg.clases if c not in cfg.clases_defecto]
+    if not sanas:
+        return None
+    if veredicto.probabilidades:
+        return float(sum(veredicto.probabilidades.get(clase, 0.0) for clase in sanas))
+    # Un veredicto sin desglose igual dice algo: si la clase que gano es sana, la confianza
+    # ES la coincidencia; si gano una de defecto, lo que queda para las sanas es el resto.
+    if veredicto.clase in sanas:
+        return float(veredicto.confianza)
+    return float(1.0 - veredicto.confianza)
+
+
+def _cartel_resultado(
+    lienzo: np.ndarray,
+    y: int,
+    estado: EstadoRevision,
+    cfg: AppConfig,
+) -> None:
+    """Dibuja la franja RESULTADO y, adentro, APROBADO o DESAPROBADO."""
+    alto_total = lienzo.shape[0]
+    ancho = lienzo.shape[1]
+
+    texto_con_fondo(lienzo, "RESULTADO", (_MARGEN, y), _NEGRO, 0.7)
+    y_caja = y + 34
+    caja = (_MARGEN, y_caja, ancho - _MARGEN, min(alto_total - 4, y_caja + _ALTO_RESULTADO))
+
+    valor = coincidencia(estado.veredicto, cfg) if estado.congelado else None
+
+    if not estado.congelado:
+        color, titulo, detalle = (55, 55, 55), "ESPERANDO", "apriete REVISAR"
+    elif valor is None:
+        color, titulo = (0, 170, 220), "SIN MODELO"
+        detalle = "no hay modelo entrenado todavia"
+    elif valor >= float(cfg.interfaz.umbral_aprobacion):
+        color, titulo = _VERDE, "APROBADO"
+        detalle = f"coincidencia {valor * 100:.0f}%  (minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%)"
+    else:
+        color, titulo = _ROJO, "DESAPROBADO"
+        detalle = f"coincidencia {valor * 100:.0f}%  (minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%)"
+
+    cv2.rectangle(lienzo, (caja[0], caja[1]), (caja[2], caja[3]), color, cv2.FILLED)
+    cv2.rectangle(lienzo, (caja[0], caja[1]), (caja[2], caja[3]), _BLANCO, 3)
+
+    escala_titulo = 2.6
+    ancho_t, alto_t, grosor_t = _tamano_texto(titulo, escala_titulo)
+    # Si la palabra no entra a lo ancho, se achica hasta que entre: "DESAPROBADO" es larga
+    # y el lienzo depende de la camara. Un cartel cortado por el borde no se puede leer.
+    while ancho_t > (caja[2] - caja[0]) - 40 and escala_titulo > 0.8:
+        escala_titulo -= 0.1
+        ancho_t, alto_t, grosor_t = _tamano_texto(titulo, escala_titulo)
+
+    cx = caja[0] + ((caja[2] - caja[0]) - ancho_t) // 2 + 3
+    cy = caja[1] + ((caja[3] - caja[1]) + alto_t) // 2 - 22
+    cv2.putText(
+        lienzo, titulo, (cx, cy), _FUENTE, escala_titulo, _color_texto(color), grosor_t + 1,
+        cv2.LINE_AA,
+    )
+    ancho_d, _, _ = _tamano_texto(detalle, 0.66)
+    cv2.putText(
+        lienzo,
+        detalle,
+        (caja[0] + ((caja[2] - caja[0]) - ancho_d) // 2 + 3, caja[3] - 18),
+        _FUENTE,
+        0.66,
+        _color_texto(color),
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def componer_simple(
+    vivo: np.ndarray,
+    referencia: Optional[np.ndarray],
+    cfg: AppConfig,
+    estado: EstadoRevision,
+) -> Pantalla:
+    """La pantalla del taller: la sierra, el modelo, y abajo el resultado en dos palabras."""
+    ancho_panel = (ANCHO_LIENZO - 3 * _MARGEN) // 2
+    alto_img, ancho_img = vivo.shape[:2]
+    alto_panel = max(220, int(ancho_panel * alto_img / max(1, ancho_img)))
+
+    alto_total = (
+        _ALTO_TITULO + alto_panel + _MARGEN + 34 + _ALTO_RESULTADO + _MARGEN + 70
+    )
+    lienzo = np.full((alto_total, ANCHO_LIENZO, 3), 24, np.uint8)
+
+    x_izq, x_der = _MARGEN, 2 * _MARGEN + ancho_panel
+
+    # --- titulos de cada recuadro, grandes ---
+    for x, titulo in ((x_izq, "SIERRA"), (x_der, "MODELO APROBADO")):
+        ancho_t, alto_t, _ = _tamano_texto(titulo, 0.9)
+        cv2.putText(
+            lienzo,
+            titulo,
+            (x + max(0, (ancho_panel - ancho_t) // 2), _ALTO_TITULO - 12),
+            _FUENTE,
+            0.9,
+            _BLANCO,
+            2,
+            cv2.LINE_AA,
+        )
+
+    y_panel = _ALTO_TITULO
+    lienzo[y_panel : y_panel + alto_panel, x_izq : x_izq + ancho_panel] = _encajar(
+        vivo, ancho_panel, alto_panel
+    )
+    if referencia is not None:
+        lienzo[y_panel : y_panel + alto_panel, x_der : x_der + ancho_panel] = _encajar(
+            referencia, ancho_panel, alto_panel
+        )
+    else:
+        cv2.rectangle(
+            lienzo,
+            (x_der, y_panel),
+            (x_der + ancho_panel, y_panel + alto_panel),
+            (45, 45, 45),
+            cv2.FILLED,
+        )
+        for indice, linea in enumerate(
+            ("Falta la foto del modelo.", "", "Pone una pieza buena y", "apreta la tecla  f")
+        ):
+            if not linea:
+                continue
+            cv2.putText(
+                lienzo,
+                linea,
+                (x_der + 24, y_panel + 60 + indice * 40),
+                _FUENTE,
+                0.75,
+                _GRIS_CLARO,
+                2,
+                cv2.LINE_AA,
+            )
+
+    if estado.congelado:
+        texto_con_fondo(lienzo, "CONGELADA", (x_izq + 6, y_panel + 6), _NEGRO, 0.6)
+
+    # --- el cartel RESULTADO, abajo de los DOS recuadros ---
+    _cartel_resultado(lienzo, y_panel + alto_panel + _MARGEN, estado, cfg)
+
+    # --- botones ---
+    y1 = alto_total - 62
+    y2 = y1 + 50
+    botones: dict[str, Rect] = {}
+    if estado.congelado:
+        botones["seguir"] = _dibujar_boton(lienzo, _MARGEN, y1, y2, "OTRA PIEZA", _GRIS)
+        x = botones["seguir"][2] + _MARGEN
+        botones["aprobada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR BUENA", _VERDE)
+        x = botones["aprobada"][2] + _MARGEN
+        botones["rechazada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR MALA", _ROJO)
+    else:
+        botones["revisar"] = _dibujar_boton(
+            lienzo, _MARGEN, y1, y2, "REVISAR", (150, 90, 0), 1.0
+        )
+
+    ancho_salir, _, _ = _tamano_texto("SALIR", 0.85)
+    botones["salir"] = _dibujar_boton(
+        lienzo,
+        ANCHO_LIENZO - _MARGEN - ancho_salir - 2 * _RELLENO_BOTON,
+        y1,
+        y2,
+        "SALIR",
+        (40, 40, 120),
+    )
+
+    if estado.mensaje:
+        ancho_msg, alto_msg, _ = _tamano_texto(estado.mensaje, 0.7)
+        texto_con_fondo(
+            lienzo,
+            estado.mensaje,
+            ((ANCHO_LIENZO - ancho_msg) // 2, y_panel + alto_panel - alto_msg - 10),
+            _VERDE,
+            0.7,
+        )
+
+    return Pantalla(imagen=lienzo, botones=botones)

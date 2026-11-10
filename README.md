@@ -382,7 +382,64 @@ El programa arranca en el modo que diga `detector.tarea` en el config. Hoy esta 
 **`classify`** (veredicto aprobada/rechazada). Los otros modos (`detect`, `segment`) sirven para
 la etapa de medicion con ArUco, mas adelante.
 
-### 5.1 Modo revision (el actual): microscopio y boton REVISAR
+### 5.1 Modo simple (el actual): dos recuadros y un cartel
+
+Es la pantalla del taller, pensada para que la lea cualquiera de un vistazo y desde lejos.
+Se activa con `interfaz.modo: simple`, que es como viene.
+
+```
+        SIERRA                      MODELO APROBADO
+  +------------------+          +------------------+
+  |  lo que ve la    |          |  la foto de una  |
+  |  camara, en vivo |          |  pieza buena     |
+  +------------------+          +------------------+
+
+  RESULTADO
+  +--------------------------------------------------+
+  |                  A P R O B A D O                 |   verde
+  |            coincidencia 87%  (minimo 70%)        |
+  +--------------------------------------------------+
+
+  [REVISAR]                                   [SALIR]
+```
+
+El operario encuadra el diente, aprieta **REVISAR** (barra espaciadora o clic), y el cartel
+de abajo dice **APROBADO** en verde o **DESAPROBADO** en rojo. Nada mas: ni porcentajes por
+clase, ni nombres de modelo, ni jerga.
+
+#### Que significa ese porcentaje
+
+La **coincidencia** es cuanta probabilidad le da el modelo a que la pieza sea de las
+aprobadas. Dicho de otra forma: cuanto se parece a las piezas buenas con las que se lo
+entreno. Por encima de `interfaz.umbral_aprobacion` (0,70 de fabrica) sale verde.
+
+> **No es una comparacion pixel a pixel contra la foto del modelo**, y no conviene que lo
+> sea. Esa comparacion estaria dominada por la luz y el encuadre, no por el estado del filo:
+> dos fotos del mismo diente con distinta iluminacion dan muy distinto, y dos dientes
+> distintos con la misma luz dan casi igual. Seria un numero con cara de dato que no mide
+> nada, que es la peor clase de numero en un control de calidad.
+>
+> La foto del modelo esta para que la compare **el ojo del operario**. El porcentaje sale
+> del modelo entrenado.
+
+El umbral de 0,70 es un punto de partida: si pasan piezas que no deberian, subirlo; si frena
+piezas buenas, bajarlo. Conviene tocarlo recien cuando haya un modelo entrenado con fotos del
+microscopio y se vea como se porta.
+
+| Tecla | Boton | Que hace |
+|---|---|---|
+| `espacio` | **REVISAR** | Congela lo que se ve y lo juzga. |
+| `espacio` | **OTRA PIEZA** | Vuelve al vivo. |
+| `a` | **GUARDAR BUENA** | Archiva la foto congelada como aprobada. |
+| `r` | **GUARDAR MALA** | Archiva la foto congelada como rechazada. |
+| `f` | — | Toma lo que se ve como **foto del modelo**. |
+| `q` | **SALIR** | Cierra. |
+
+Los otros dos modos siguen disponibles en `interfaz.modo`: **`revision`** es la misma
+pantalla partida pero con la banda de veredicto arriba y el detalle por clase, y
+**`clasico`** es la pantalla anterior al microscopio, sin partir, juzgando todos los frames.
+
+### 5.1.ter Modo revision: la variante con detalle por clase
 
 Es la pantalla pensada para el **microscopio USB**. Se activa con `interfaz.modo: revision`
 en el config, que es como viene.

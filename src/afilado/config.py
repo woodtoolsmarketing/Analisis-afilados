@@ -88,7 +88,7 @@ class FiltrosConfig:
     iteraciones_morfologicas: int = 1
 
 
-MODOS_INTERFAZ: frozenset[str] = frozenset({"clasico", "revision"})
+MODOS_INTERFAZ: frozenset[str] = frozenset({"clasico", "revision", "simple"})
 
 
 @dataclass
@@ -97,6 +97,7 @@ class InterfazConfig:
 
     modo: str = "clasico"
     referencia_aprobada: str = "data/referencia/microscopio/aprobada.jpg"
+    umbral_aprobacion: float = 0.70
 
 
 @dataclass
@@ -264,6 +265,12 @@ def _validar(cfg: AppConfig) -> None:
         raise ValueError(
             f"filtros.kernel_morfologico debe ser impar y >= 1, se recibio {kernel}. "
             "Un kernel par no tiene pixel central y desplazaria la mascara."
+        )
+
+    if not 0.0 < float(cfg.interfaz.umbral_aprobacion) <= 1.0:
+        raise ValueError(
+            "interfaz.umbral_aprobacion debe estar entre 0 y 1 (0.70 = 70%), se recibio "
+            f"{cfg.interfaz.umbral_aprobacion}."
         )
 
     if cfg.interfaz.modo not in MODOS_INTERFAZ:

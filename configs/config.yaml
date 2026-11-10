@@ -85,17 +85,32 @@ roi:
 
 # Como se ve el programa en pantalla.
 interfaz:
-  # "clasico"  la banda de veredicto sobre la imagen en vivo, juzgando todo el tiempo.
-  # "revision" pantalla partida: a la izquierda lo que ve la camara, a la derecha la foto
-  #            de una pieza APROBADA para comparar a ojo, y un boton REVISAR. El programa
-  #            no juzga solo: el operario encuadra el diente, aprieta REVISAR y recien ahi
-  #            se congela esa imagen y se analiza. Es el modo pensado para el microscopio,
-  #            donde hay que acomodar la pieza antes de que la foto sirva de algo.
-  modo: revision
+  # "simple"   LA DEL TALLER. Dos recuadros --la sierra y el modelo aprobado-- y abajo
+  #            un cartel RESULTADO enorme que dice APROBADO en verde o DESAPROBADO en rojo.
+  #            Sin porcentajes por clase ni jerga: se lee de un vistazo y desde lejos.
+  # "revision" lo mismo pero con la banda de veredicto arriba y el detalle por clase.
+  # "clasico"  sin pantalla partida: la banda sobre la imagen en vivo, juzgando todos los
+  #            frames. Es el modo de la webcam cenital, anterior al microscopio.
+  modo: simple
   # Foto de una pieza aprobada, la que se muestra al lado para comparar. Si no existe, el
   # programa avisa en pantalla y sigue funcionando. Se puede sacar en el momento con la
   # tecla 'f': congela lo que se ve y lo guarda como referencia.
   referencia_aprobada: data/referencia/microscopio/aprobada.jpg
+  # A partir de que coincidencia se da por APROBADO. 0.70 = 70%.
+  #
+  # QUE MIDE ESTE NUMERO: cuanta probabilidad le da el modelo a que la pieza sea de las
+  # APROBADAS. O sea, cuanto se parece a las piezas buenas con las que se lo entreno.
+  #
+  # QUE NO MIDE: NO es una comparacion pixel a pixel contra la foto de referencia. Eso
+  # estaria dominado por la luz y el encuadre, no por el estado del filo: dos fotos del
+  # mismo diente con distinta iluminacion dan muy distinto, y dos dientes distintos con la
+  # misma luz dan casi igual. Daria un porcentaje con cara de dato que no significa nada.
+  # La foto de referencia esta para que la compare el OJO del operario, no el programa.
+  #
+  # 0.70 es un punto de partida. Si pasan piezas que no deberian, subirlo; si frena piezas
+  # buenas, bajarlo. Conviene ajustarlo recien cuando haya un modelo entrenado con fotos
+  # del microscopio y se vea como se porta.
+  umbral_aprobacion: 0.70
 
 detector:
   # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:

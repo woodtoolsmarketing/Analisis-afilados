@@ -437,6 +437,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     teclas_clase = _clases_de_teclas(cfg)
     fuente_es_camara = _es_camara(cfg.camara.fuente)
     referencia = _cargar_referencia(cfg)
+    # El bucle es el mismo en los dos modos --encuadrar, REVISAR, congelar, juzgar--; lo
+    # unico que cambia es como se dibuja. "simple" es la pantalla del taller.
+    componer = (
+        revision.componer_simple if cfg.interfaz.modo == "simple" else revision.componer
+    )
 
     camara = Camara(cfg.camara)
     try:
@@ -445,7 +450,9 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         _registro.error("%s", error)
         return 1
 
-    _registro.info("MODO REVISION | camara: %s", camara.descripcion)
+    _registro.info(
+        "MODO %s | camara: %s", cfg.interfaz.modo.upper(), camara.descripcion
+    )
     _registro.info(
         "modelo: %s",
         clasificador.descripcion if clasificador else "SIN MODELO (modo recoleccion)",
@@ -502,7 +509,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 estado.mensaje = None
 
             a_mostrar = congelado if estado.congelado and congelado is not None else vivo
-            pantalla = revision.componer(a_mostrar, referencia, cfg, estado)
+            pantalla = componer(a_mostrar, referencia, cfg, estado)
             cv2.imshow(_VENTANA, pantalla.imagen)
 
             tecla = cv2.waitKey(30) & 0xFF
@@ -589,7 +596,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Modo clasificacion: veredicto de la sierra entera (aprobada/rechazada), sin cajas ni
     # medidas. Es un camino aparte que no toca el pipeline de deteccion.
     if cfg.detector.tarea == "classify":
-        if cfg.interfaz.modo == "revision":
+        if cfg.interfaz.modo in ("revision", "simple"):
             return _ejecutar_revision(cfg, args)
         return _ejecutar_clasificacion(cfg, args)
 

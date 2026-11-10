@@ -295,7 +295,7 @@ class Camara:
                 return (
                     f"No se pudo abrir la camara {self._fuente}, pero SI hay camara: "
                     f"{listado}. Corregi 'camara.fuente' en el config con ese indice, o "
-                    "poné 'auto' para que la busque sola."
+                    "pone 'auto' para que la busque sola."
                 )
             return (
                 f"No se pudo abrir la camara {self._fuente} con el backend {nombre_backend}, "

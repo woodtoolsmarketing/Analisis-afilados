@@ -142,8 +142,145 @@ def test_los_textos_de_pantalla_no_llevan_acentos() -> None:
     Es un error facil de cometer y dificil de ver en una revision de codigo, porque el
     codigo se lee perfecto y solo se rompe en la pantalla del taller.
     """
-    for nombre in ("revision.py", "overlay.py"):
-        texto = (_RAIZ / "src" / "afilado" / nombre).read_text(encoding="utf-8")
-        raros = sorted({c for c in texto if ord(c) > 127})
+    culpables: dict[str, list[str]] = {}
+    for ruta in sorted((_RAIZ / "src" / "afilado").rglob("*.py")):
+        raros = sorted({c for c in ruta.read_text(encoding="utf-8") if ord(c) > 127})
+        if raros:
+            culpables[ruta.name] = raros
 
-        assert not raros, f"{nombre} tiene caracteres que cv2.putText no sabe dibujar: {raros}"
+    assert not culpables, (
+        "estos modulos tienen caracteres que cv2.putText dibuja como '?' y que la consola "
+        f"de Windows tambien rompe: {culpables}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# MODO SIMPLE: el cartel RESULTADO con APROBADO / DESAPROBADO.
+#
+# Lo que se prueba es el umbral y el COLOR, porque el color es lo unico que el
+# operario mira de lejos. Un verde cuando tendria que ser rojo deja pasar una
+# sierra que hay que tirar.
+# ---------------------------------------------------------------------------
+
+
+def _veredicto(aprobada: float) -> Veredicto:
+    """Un veredicto binario con la probabilidad dada para 'aprobada'."""
+    gana_aprobada = aprobada >= 0.5
+    return Veredicto(
+        clase="aprobada" if gana_aprobada else "rechazada",
+        clase_id=0 if gana_aprobada else 1,
+        confianza=aprobada if gana_aprobada else 1.0 - aprobada,
+        probabilidades={"aprobada": aprobada, "rechazada": 1.0 - aprobada},
+    )
+
+
+@pytest.mark.parametrize("probabilidad", [0.0, 0.3, 0.7, 0.95, 1.0])
+def test_la_coincidencia_es_la_probabilidad_de_las_clases_sanas(
+    cfg: AppConfig, probabilidad: float
+) -> None:
+    assert revision.coincidencia(_veredicto(probabilidad), cfg) == pytest.approx(probabilidad)
+
+
+def test_sin_veredicto_no_hay_coincidencia(cfg: AppConfig) -> None:
+    """Sin modelo no se inventa un numero: el cartel va a decir SIN MODELO."""
+    assert revision.coincidencia(None, cfg) is None
+
+
+def test_la_coincidencia_suma_todas_las_clases_sanas() -> None:
+    """Si manana el esquema pasa de aprobada/rechazada a varios defectos con nombre."""
+    cfg = AppConfig(
+        clases=["ok", "aceptable", "fisura", "oxido"],
+        clases_defecto=["fisura", "oxido"],
+    )
+    veredicto = Veredicto(
+        clase="ok",
+        clase_id=0,
+        confianza=0.5,
+        probabilidades={"ok": 0.5, "aceptable": 0.3, "fisura": 0.15, "oxido": 0.05},
+    )
+
+    assert revision.coincidencia(veredicto, cfg) == pytest.approx(0.8)
+
+
+def test_un_veredicto_sin_desglose_igual_dice_algo(cfg: AppConfig) -> None:
+    """Sin probabilidades por clase, la confianza de la clase ganadora alcanza."""
+    sana = Veredicto(clase="aprobada", clase_id=0, confianza=0.9, probabilidades={})
+    defectuosa = Veredicto(clase="rechazada", clase_id=1, confianza=0.9, probabilidades={})
+
+    assert revision.coincidencia(sana, cfg) == pytest.approx(0.9)
+    assert revision.coincidencia(defectuosa, cfg) == pytest.approx(0.1)
+
+
+def _color_del_cartel(pantalla) -> tuple[int, int, int]:
+    """Lee el color de fondo del cartel RESULTADO, abajo al centro."""
+    alto, ancho = pantalla.imagen.shape[:2]
+    # el cartel ocupa la franja de abajo, arriba de los botones
+    fila = alto - 62 - revision._ALTO_RESULTADO // 2
+    return tuple(int(v) for v in pantalla.imagen[fila, 40])
+
+
+@pytest.mark.parametrize(
+    "probabilidad, espera_verde",
+    [(1.0, True), (0.85, True), (0.70, True), (0.6999, False), (0.5, False), (0.0, False)],
+)
+def test_el_umbral_decide_el_color_del_cartel(
+    cfg: AppConfig, probabilidad: float, espera_verde: bool
+) -> None:
+    """70% justo cuenta como APROBADO: el umbral es "al menos", no "mas de"."""
+    cfg.interfaz.umbral_aprobacion = 0.70
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(probabilidad))
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
+    azul, verde, rojo = _color_del_cartel(pantalla)
+
+    if espera_verde:
+        assert verde > 120 and rojo < 80, f"deberia ser verde y dio {(azul, verde, rojo)}"
+    else:
+        assert rojo > 120 and verde < 80, f"deberia ser rojo y dio {(azul, verde, rojo)}"
+
+
+def test_el_umbral_se_puede_mover(cfg: AppConfig) -> None:
+    """Subir el umbral tiene que cambiar el veredicto de la misma pieza."""
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(0.75))
+
+    cfg.interfaz.umbral_aprobacion = 0.70
+    verde = _color_del_cartel(revision.componer_simple(_imagen(), _imagen(), cfg, estado))
+    cfg.interfaz.umbral_aprobacion = 0.90
+    rojo = _color_del_cartel(revision.componer_simple(_imagen(), _imagen(), cfg, estado))
+
+    assert verde[1] > 120, "con umbral 70 una pieza al 75% tiene que aprobar"
+    assert rojo[2] > 120, "con umbral 90 la misma pieza tiene que desaprobar"
+
+
+def test_antes_de_revisar_no_dice_ni_aprobado_ni_desaprobado(cfg: AppConfig) -> None:
+    """En vivo el cartel esta en gris: dar un veredicto sin que se lo pidan seria juzgar
+    una imagen que el operario todavia no encuadro."""
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, revision.EstadoRevision())
+    azul, verde, rojo = _color_del_cartel(pantalla)
+
+    assert verde < 120 and rojo < 120
+    assert set(pantalla.botones) == {"revisar", "salir"}
+
+
+@pytest.mark.parametrize("congelado", [False, True])
+def test_los_botones_del_modo_simple_no_se_pisan(cfg: AppConfig, congelado: bool) -> None:
+    estado = revision.EstadoRevision(congelado=congelado, veredicto=_veredicto(0.9))
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
+
+    rects = list(pantalla.botones.values())
+    alto, ancho = pantalla.imagen.shape[:2]
+    for i, primero in enumerate(rects):
+        assert 0 <= primero[0] < primero[2] <= ancho
+        assert 0 <= primero[1] < primero[3] <= alto
+        for segundo in rects[i + 1 :]:
+            assert not _rects_se_solapan(primero, segundo), pantalla.botones
+
+
+@pytest.mark.parametrize("forma", [(600, 800, 3), (480, 640, 3), (1080, 1920, 3)])
+def test_el_modo_simple_anda_con_cualquier_camara(cfg: AppConfig, forma) -> None:
+    pantalla = revision.componer_simple(
+        np.zeros(forma, np.uint8), _imagen(), cfg, revision.EstadoRevision(congelado=True)
+    )
+
+    assert pantalla.imagen.shape[1] == revision.ANCHO_LIENZO
