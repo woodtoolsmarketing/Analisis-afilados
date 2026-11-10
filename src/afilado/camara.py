@@ -76,6 +76,10 @@ _MAX_INDICE_SONDEO = 3
 # Cuantas veces se insiste en leer un frame antes de descartar una camara que abrio.
 _INTENTOS_LECTURA_SONDEO = 8
 
+# Frames que se comparan para saber si la fuente esta viva o congelada. Con tres alcanza:
+# un sensor real no repite dos frames seguidos ni a oscuras.
+_FRAMES_PARA_VERIFICAR_SENAL = 4
+
 # Segundos de respiro despues de cerrar una camara que SI se abrio, antes de tocar la
 # siguiente. Sin esto el sondeo cuelga el dispositivo que acaba de probar.
 _PAUSA_ENTRE_SONDEOS = 0.35
@@ -89,25 +93,46 @@ _REINTENTOS_APERTURA = 2
 
 @dataclass(frozen=True)
 class CamaraDetectada:
-    """Una camara que se probo y ENTREGO un frame de verdad."""
+    """Una camara que se probo y ENTREGO frames de verdad."""
 
     indice: int
     backend: int
     ancho: int
     alto: int
+    congelada: bool = False
 
     @property
     def nombre_backend(self) -> str:
         return _NOMBRES_BACKEND.get(self.backend, str(self.backend))
 
     def __str__(self) -> str:
-        return f"indice {self.indice} @{self.ancho}x{self.alto} ({self.nombre_backend})"
+        sufijo = "  [imagen congelada: parece camara virtual]" if self.congelada else ""
+        return f"indice {self.indice} @{self.ancho}x{self.alto} ({self.nombre_backend}){sufijo}"
 
 
 def _backends_de_sondeo() -> tuple[int, ...]:
     if sys.platform.startswith("win"):
         return _BACKENDS_AUTO_WINDOWS
     return _BACKENDS_AUTO_OTROS
+
+
+def _hay_senal_viva(captura: "cv2.VideoCapture", primero: np.ndarray) -> bool:
+    """True si la fuente entrega imagen VIVA, no el mismo buffer una y otra vez.
+
+    Un sensor real nunca repite dos frames bit a bit: siempre hay ruido, aun a oscuras.
+    Una camara virtual sin origen --DroidCam sin telefono, por ejemplo-- devuelve siempre
+    el mismo cartel. Medido en esta maquina: DroidCam 24 de 24 frames identicos, el
+    microscopio 0 de 24.
+    """
+    anterior = primero
+    for _ in range(_FRAMES_PARA_VERIFICAR_SENAL):
+        exito, actual = captura.read()
+        if not exito or actual is None:
+            continue
+        if actual.shape == anterior.shape and not np.array_equal(actual, anterior):
+            return True
+        anterior = actual
+    return False
 
 
 def _probar(indice: int, backend: int) -> Optional[CamaraDetectada]:
@@ -133,7 +158,13 @@ def _probar(indice: int, backend: int) -> Optional[CamaraDetectada]:
         if frame is None:
             return None
         alto, ancho = frame.shape[:2]
-        return CamaraDetectada(indice=indice, backend=backend, ancho=int(ancho), alto=int(alto))
+        return CamaraDetectada(
+            indice=indice,
+            backend=backend,
+            ancho=int(ancho),
+            alto=int(alto),
+            congelada=not _hay_senal_viva(captura, frame),
+        )
     except cv2.error:
         return None
     finally:
@@ -264,7 +295,13 @@ class Camara:
         raise RuntimeError(self._mensaje_no_abre())
 
     def _intentar_abrir(self) -> Optional[cv2.VideoCapture]:
-        """Una pasada por todos los candidatos. Devuelve None si ninguno entrego imagen.
+        """Una pasada por los candidatos, prefiriendo los que tengan IMAGEN VIVA.
+
+        Una camara virtual --DroidCam sin telefono es el caso de esta PC-- ocupa el indice
+        mas bajo, siempre abre y siempre entrega frames, todos iguales. Quedarse con la
+        primera que "funcione" significaba elegir siempre esa y nunca el microscopio. Si al
+        final no hay ninguna viva se usa la congelada igual, porque es mejor que nada y el
+        log explica que paso.
 
         Se lee un frame de prueba a proposito: isOpened() devuelve True con backends que
         despues no entregan nada, y en ese caso el bucle en vivo arrancaria para morirse
@@ -272,7 +309,14 @@ class Camara:
         revisar el cable cuando el problema era el backend.
         """
         pedido = (self._fuente, self._backend)
+        congelada: Optional[tuple[int, int]] = None
+        # Si un indice resulto congelado, no se lo prueba con los otros backends: una
+        # camara virtual lo es por cualquier camino, y repetir el aviso en el log hace
+        # parecer que el programa esta trabado.
+        indices_congelados: set[int] = set()
         for indice, backend in self._candidatos():
+            if indice in indices_congelados:
+                continue
             captura = cv2.VideoCapture(indice, backend)
             if captura.isOpened():
                 # Se insiste varias veces, igual que en el sondeo. El microscopio USB del
@@ -285,6 +329,20 @@ class Camara:
                     if exito and frame is not None:
                         break
                 if exito and frame is not None:
+                    if self._auto and not _hay_senal_viva(captura, frame):
+                        # Imagen congelada: casi seguro una camara virtual. Se guarda por
+                        # si no hay nada mejor, pero se sigue buscando.
+                        _log.info(
+                            "el indice %d entrega una imagen congelada (parece una camara "
+                            "virtual); se sigue buscando",
+                            indice,
+                        )
+                        indices_congelados.add(indice)
+                        if congelada is None:
+                            congelada = (indice, backend)
+                        captura.release()
+                        time.sleep(_PAUSA_ENTRE_SONDEOS)
+                        continue
                     if (indice, backend) != pedido:
                         _log.info(
                             "camara encontrada en el indice %d con el backend %s "
@@ -295,6 +353,23 @@ class Camara:
                         )
                     self._fuente, self._backend = indice, backend
                     return captura
+            captura.release()
+
+        if congelada is not None:
+            indice, backend = congelada
+            _log.warning(
+                "la unica camara que responde es el indice %d y entrega una imagen "
+                "congelada. Si tenes una camara virtual instalada (DroidCam y similares), "
+                "la real puede estar desenchufada o tomada por otro programa.",
+                indice,
+            )
+            captura = cv2.VideoCapture(indice, backend)
+            if captura.isOpened():
+                for _ in range(_INTENTOS_LECTURA_SONDEO):
+                    exito, frame = captura.read()
+                    if exito and frame is not None:
+                        self._fuente, self._backend = indice, backend
+                        return captura
             captura.release()
         return None
 

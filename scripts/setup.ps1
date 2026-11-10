@@ -218,7 +218,7 @@ if ($LASTEXITCODE -ne 0) {
         # mas lento (5.8 ms contra 1.8 ms) pero el mismo resultado. No es motivo para
         # dejar la maquina sin instalar.
         Escribir-Aviso "Fallo la instalacion; reintento sin onnxruntime, que es opcional."
-        & $PythonVenv -m pip install "opencv-contrib-python>=4.8,<5.0" "numpy>=1.24,<3.0" "pyyaml>=6.0"
+        & $PythonVenv -m pip install "opencv-contrib-python>=4.8,<5.0" "numpy>=1.24,<3.0" "pyyaml>=6.0" "pillow>=10.0"
         if ($LASTEXITCODE -ne 0) {
             Escribir-Error "Fallo la instalacion de dependencias. Revisa el error de pip mas arriba."
             exit 1

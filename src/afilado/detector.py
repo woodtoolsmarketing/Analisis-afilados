@@ -13,7 +13,7 @@ CLASIFICACION (esta sierra sirve o no) -- protocolo `Clasificador`:
   - `DetectorClasificador`: corre el checkpoint .pt con ultralytics. Necesita torch.
   - `DetectorClasificadorOnnx`: corre el modelo exportado a .onnx con onnxruntime o, si no
     esta, con cv2.dnn. NO necesita torch ni ultralytics, y da el mismo veredicto. Es la ruta
-    para la PC del taller: 80 MB de RAM en vez de 440 MB, y ~250 MB de entorno en vez de
+    para la PC del taller: 80 MB de RAM en vez de 440 MB, y ~280 MB de entorno en vez de
     1.2 GB. `crear_clasificador` elige uno u otro segun la extension de detector.pesos.
 
 `ultralytics` y `torch` se importan de forma PEREZOSA (dentro de los metodos, en try/except),
@@ -580,7 +580,7 @@ class DetectorClasificadorOnnx:
     ruta .pt con ultralytics:
 
         RAM del proceso      440 MB  ->  80 MB de pico (48 MB en regimen)
-        entorno en disco     1.2 GB  ->  ~250 MB   (torch solo pesa 533 MB)
+        entorno en disco     1.2 GB  ->  ~280 MB   (torch solo pesa 533 MB)
         cargar el modelo     1.2 s   ->  0.05 s
         inferencia a 224 px  12 ms   ->  5.8 ms con cv2.dnn, 1.8 ms con onnxruntime
 

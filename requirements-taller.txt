@@ -16,7 +16,7 @@
 # Medido en un i5-12400 sin placa de video, corriendo el mismo bucle en vivo:
 #
 #                        con torch      con .onnx
-#     entorno en disco     ~2.5 GB        ~250 MB
+#     entorno en disco     ~2.5 GB        ~280 MB
 #     RAM del proceso       440 MB      48 MB (pico 82)
 #     arranque + modelo       ~4 s          ~0.3 s
 #
@@ -33,6 +33,15 @@
 opencv-contrib-python>=4.8,<5.0
 numpy>=1.24,<3.0
 pyyaml>=6.0
+
+# TIPOGRAFIA de la pantalla. cv2.putText solo sabe dibujar las fuentes Hershey: trazos de
+# los anos 60 pensados para plotters, que se ven como un plano tecnico y NO tienen acentos
+# (cada tilde sale como '?'). Pillow dibuja TrueType y toma Segoe UI de Windows, que esta
+# en cualquier maquina desde Vista. Son ~16 MB instalados.
+#
+# Es OPCIONAL de verdad: si falta, src/afilado/tipografia.py cae a Hershey y el programa
+# sigue funcionando, solo que mas feo. El instalador no aborta si no se puede instalar.
+pillow>=10.0
 
 # ONNX RUNTIME: opcional pero conviene.
 # Sin el, el modelo .onnx corre igual con cv2.dnn, que ya viene con opencv. Con el, la

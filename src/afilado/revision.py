@@ -25,6 +25,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from . import tipografia
 from .config import AppConfig
 from .overlay import _color_texto, _tamano_texto, texto_con_fondo
 from .tipos import Veredicto
@@ -551,15 +552,12 @@ def estado_resultado(
 
 
 def _boton_lindo(
-    img: np.ndarray, x: int, y1: int, y2: int, texto: str, color, escala: float = 0.78
+    img: np.ndarray, x: int, y1: int, y2: int, texto: str, color, tamano: int = 21
 ) -> Rect:
-    """Boton redondeado que se adapta a su texto."""
-    ancho_texto, alto_texto, _ = _tamano_texto(texto, escala)
+    """Boton redondeado que se adapta a su texto. NO dibuja el texto: eso va despues."""
+    ancho_texto, _ = tipografia.medir(texto, tamano, negrita=True)
     x2 = x + ancho_texto + 2 * _RELLENO_BOTON
     _rect_redondeado(img, (x, y1), (x2, y2), color, 10, -1)
-    cy = y1 + (y2 - y1 + alto_texto) // 2 - 6
-    cv2.putText(img, texto, (x + _RELLENO_BOTON, cy), _FUENTE_TITULO, escala,
-                _color_texto(color), 1, cv2.LINE_AA)
     return (x, y1, x2, y2)
 
 
@@ -570,7 +568,13 @@ def componer_simple(
     estado: EstadoRevision,
     alto_maximo: Optional[int] = None,
 ) -> Pantalla:
-    """La pantalla del taller: la sierra, el modelo y el resultado en dos palabras."""
+    """La pantalla del taller: la sierra, el modelo y el resultado en dos palabras.
+
+    Se dibuja en dos tiempos: primero TODAS las formas sobre el lienzo de OpenCV, y recien
+    despues todo el texto, en una sola pasada de Pillow. Dibujar texto de a uno obligaria a
+    convertir la imagen entera de BGR a RGB y de vuelta una vez por linea: veinte
+    conversiones de 1280x672 en cada frame.
+    """
     margen = _MARGEN_SIMPLE
     alto_cabecera, alto_resultado, alto_botones = (
         _ALTO_CABECERA, _ALTO_RESULTADO, _ALTO_BOTONES,
@@ -590,34 +594,21 @@ def componer_simple(
     x_izq, x_der = margen, 2 * margen + ancho_panel
     y_panel = alto_cabecera
 
-    # --- cabecera: titulos de cada columna ---
-    for x, titulo in ((x_izq, "SIERRA"), (x_der, "MODELO APROBADO")):
-        ancho_t, _, _ = _tamano_texto(titulo, 0.62)
-        cv2.putText(lienzo, titulo, (x + (ancho_panel - ancho_t) // 2, alto_cabecera - 16),
-                    _FUENTE_TITULO, 0.62, _TEXTO_TENUE, 1, cv2.LINE_AA)
-
-    # --- tarjetas con las dos imagenes ---
+    # ---------------- formas ----------------
     for x, imagen in ((x_izq, vivo), (x_der, referencia)):
         _tarjeta(lienzo, (x - 3, y_panel - 3), (x + ancho_panel + 3, y_panel + alto_panel + 3))
         if imagen is not None:
             lienzo[y_panel : y_panel + alto_panel, x : x + ancho_panel] = _encajar(
                 imagen, ancho_panel, alto_panel
             )
-        else:
-            for i, linea in enumerate(("Falta la foto del modelo.", "",
-                                       "Pone una pieza buena", "y apreta la tecla  f")):
-                if not linea:
-                    continue
-                cv2.putText(lienzo, linea, (x + 26, y_panel + 58 + i * 36),
-                            _FUENTE_TITULO, 0.6, _TEXTO_TENUE, 1, cv2.LINE_AA)
 
     if estado.congelado:
-        _rect_redondeado(lienzo, (x_izq + 10, y_panel + 10), (x_izq + 142, y_panel + 42),
-                         _FONDO, 8, -1)
-        cv2.putText(lienzo, "CONGELADA", (x_izq + 20, y_panel + 32), _FUENTE_TITULO,
-                    0.5, _TEXTO, 1, cv2.LINE_AA)
+        ancho_c, _ = tipografia.medir("CONGELADA", 17, negrita=True)
+        _rect_redondeado(
+            lienzo, (x_izq + 10, y_panel + 10),
+            (x_izq + 10 + ancho_c + 24, y_panel + 44), _FONDO, 8, -1,
+        )
 
-    # --- tarjeta de resultado ---
     titulo, detalle, color, aprobado = estado_resultado(estado, cfg)
     y_res = y_panel + alto_panel + margen
     _tarjeta(lienzo, (margen, y_res), (ANCHO_LIENZO - margen, y_res + alto_resultado),
@@ -629,50 +620,89 @@ def componer_simple(
     _icono_veredicto(lienzo, (cx, cy), radio, aprobado, color)
 
     x_texto = cx + radio + 34
-    escala = 1.9
-    ancho_t, alto_t, _ = _tamano_texto(titulo, escala)
-    while x_texto + ancho_t > ANCHO_LIENZO - margen - 30 and escala > 0.8:
-        escala -= 0.1
-        ancho_t, alto_t, _ = _tamano_texto(titulo, escala)
-    cv2.putText(lienzo, titulo, (x_texto, cy + 2), _FUENTE_TITULO, escala,
-                color if aprobado is not None else _TEXTO, 2, cv2.LINE_AA)
-    cv2.putText(lienzo, detalle, (x_texto + 3, cy + 34), _FUENTE_TITULO, 0.56,
-                _TEXTO_TENUE, 1, cv2.LINE_AA)
-
     valor = coincidencia(estado.veredicto, cfg) if estado.congelado else None
     if valor is not None:
-        _barra_coincidencia(lienzo, x_texto + 3, cy + 48, ANCHO_LIENZO - margen - 30,
+        _barra_coincidencia(lienzo, x_texto, cy + 36, ANCHO_LIENZO - margen - 30,
                             valor, float(cfg.interfaz.umbral_aprobacion), color)
-        texto_umbral = f"minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%"
-        ancho_u, _, _ = _tamano_texto(texto_umbral, 0.46)
-        cv2.putText(lienzo, texto_umbral, (ANCHO_LIENZO - margen - 30 - ancho_u, cy + 86),
-                    _FUENTE_TITULO, 0.46, _TEXTO_TENUE, 1, cv2.LINE_AA)
 
-    # --- botones ---
     y1 = alto_total - alto_botones + 14
     y2 = y1 + 48
     botones: dict[str, Rect] = {}
+    etiquetas: list[tuple[str, Rect, tuple]] = []
     if estado.congelado:
-        botones["seguir"] = _boton_lindo(lienzo, margen, y1, y2, "OTRA PIEZA", _SUPERFICIE)
-        x = botones["seguir"][2] + 12
-        botones["aprobada"] = _boton_lindo(lienzo, x, y1, y2, "GUARDAR BUENA", _VERDE_OK)
-        x = botones["aprobada"][2] + 12
-        botones["rechazada"] = _boton_lindo(lienzo, x, y1, y2, "GUARDAR MALA", _ROJO_NO)
+        for clave, texto_boton, color_boton in (
+            ("seguir", "OTRA PIEZA", _SUPERFICIE),
+            ("aprobada", "GUARDAR BUENA", _VERDE_OK),
+            ("rechazada", "GUARDAR MALA", _ROJO_NO),
+        ):
+            x = margen if not botones else max(r[2] for r in botones.values()) + 12
+            rect = _boton_lindo(lienzo, x, y1, y2, texto_boton, color_boton)
+            botones[clave] = rect
+            etiquetas.append((texto_boton, rect, color_boton))
     else:
-        botones["revisar"] = _boton_lindo(lienzo, margen, y1, y2, "REVISAR", _AZUL, 0.95)
+        rect = _boton_lindo(lienzo, margen, y1, y2, "REVISAR", _AZUL, 24)
+        botones["revisar"] = rect
+        etiquetas.append(("REVISAR", rect, _AZUL))
 
-    ancho_salir, _, _ = _tamano_texto("SALIR", 0.78)
-    botones["salir"] = _boton_lindo(
+    ancho_salir, _ = tipografia.medir("SALIR", 21, negrita=True)
+    rect_salir = _boton_lindo(
         lienzo, ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON, y1, y2,
         "SALIR", _SUPERFICIE,
     )
+    botones["salir"] = rect_salir
+    etiquetas.append(("SALIR", rect_salir, _SUPERFICIE))
 
+    rect_mensaje = None
     if estado.mensaje:
-        ancho_m, alto_m, _ = _tamano_texto(estado.mensaje, 0.68)
+        ancho_m, alto_m = tipografia.medir(estado.mensaje, 22, negrita=True)
         x_m = (ANCHO_LIENZO - ancho_m) // 2
-        _rect_redondeado(lienzo, (x_m - 16, y_panel + alto_panel - alto_m - 26),
-                         (x_m + ancho_m + 16, y_panel + alto_panel - 10), _VERDE_OK, 10, -1)
-        cv2.putText(lienzo, estado.mensaje, (x_m, y_panel + alto_panel - 20),
-                    _FUENTE_TITULO, 0.68, _TEXTO, 1, cv2.LINE_AA)
+        y_m = y_panel + alto_panel - alto_m - 30
+        _rect_redondeado(lienzo, (x_m - 18, y_m - 10), (x_m + ancho_m + 18, y_m + alto_m + 12),
+                         _VERDE_OK, 12, -1)
+        rect_mensaje = (x_m, y_m)
+
+    # ---------------- texto, todo de una pasada ----------------
+    with tipografia.Pincel(lienzo) as pincel:
+        for x, titulo_col in ((x_izq, "SIERRA"), (x_der, "MODELO APROBADO")):
+            ancho_t, alto_t = tipografia.medir(titulo_col, 20, negrita=True)
+            pincel.texto(titulo_col, (x + (ancho_panel - ancho_t) // 2,
+                                      alto_cabecera - alto_t - 12), _TEXTO_TENUE, 20, True)
+
+        if referencia is None:
+            for i, linea in enumerate(("Falta la foto del modelo.", "",
+                                       "Pone una pieza buena", "y apreta la tecla  f")):
+                if linea:
+                    pincel.texto(linea, (x_der + 26, y_panel + 52 + i * 34), _TEXTO_TENUE, 20)
+
+        if estado.congelado:
+            pincel.texto("CONGELADA", (x_izq + 22, y_panel + 19), _TEXTO, 17, True)
+
+        ancho_v, alto_v = tipografia.medir(titulo, 54, negrita=True)
+        tamano_v = 54
+        while x_texto + ancho_v > ANCHO_LIENZO - margen - 40 and tamano_v > 22:
+            tamano_v -= 2
+            ancho_v, alto_v = tipografia.medir(titulo, tamano_v, negrita=True)
+        pincel.texto(titulo, (x_texto, cy - alto_v - 10),
+                     color if aprobado is not None else _TEXTO, tamano_v, True)
+        pincel.texto(detalle, (x_texto + 2, cy + 6), _TEXTO_TENUE, 19)
+
+        if valor is not None:
+            texto_umbral = f"minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%"
+            ancho_u, _ = tipografia.medir(texto_umbral, 16)
+            pincel.texto(texto_umbral, (ANCHO_LIENZO - margen - 30 - ancho_u, cy + 60),
+                         _TEXTO_TENUE, 16)
+
+        for texto_boton, rect, color_boton in etiquetas:
+            tamano = 24 if texto_boton == "REVISAR" else 21
+            ancho_b, alto_b = tipografia.medir(texto_boton, tamano, negrita=True)
+            pincel.texto(
+                texto_boton,
+                (rect[0] + ((rect[2] - rect[0]) - ancho_b) // 2,
+                 rect[1] + ((rect[3] - rect[1]) - alto_b) // 2),
+                _color_texto(color_boton), tamano, True,
+            )
+
+        if rect_mensaje is not None and estado.mensaje:
+            pincel.texto(estado.mensaje, rect_mensaje, _TEXTO, 22, True)
 
     return Pantalla(imagen=lienzo, botones=botones)

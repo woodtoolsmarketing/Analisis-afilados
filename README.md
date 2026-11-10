@@ -122,7 +122,7 @@ En la maquina de desarrollo, desde un entorno liviano (ver 3.4):
 python scripts/construir_exe.py
 ```
 
-Deja `dist\AnalisisAfilado.exe`, de unos **77 MB**. Adentro viajan el interprete de Python,
+Deja `dist\AnalisisAfilado.exe`, de unos **84 MB**. Adentro viajan el interprete de Python,
 OpenCV, onnxruntime y el config; **no** viaja el modelo.
 
 En el taller: copiar el .exe a una carpeta **con permiso de escritura** (el Escritorio
@@ -167,7 +167,7 @@ lo que solo tiene sentido en la maquina de entrenamiento. Medido instalando de c
 
 | | Completa | `-Taller` |
 |---|---|---|
-| Entorno en disco | **1,2 GB** | **252 MB** |
+| Entorno en disco | **1,2 GB** | **281 MB** |
 | Paquetes | ~35 (torch, ultralytics, matplotlib, sympy...) | **7** |
 | Puede entrenar | si | no |
 | Puede dar veredictos | si | **si** |
@@ -197,7 +197,7 @@ Medido en un i5-12400 sin placa de video, corriendo el mismo bucle en vivo:
 
 | | Con `.pt` (torch) | Con `.onnx` |
 |---|---|---|
-| Entorno en disco | 1,2 GB | ~250 MB |
+| Entorno en disco | 1,2 GB | ~280 MB |
 | RAM del proceso | 440 MB | **48 MB** (pico 82 MB) |
 | Arranque + carga del modelo | ~4 s | ~0,3 s |
 | Inferencia a 224 px | 12 ms | 5,8 ms |
@@ -706,7 +706,7 @@ Reglas para que las fotos sirvan:
 Analisis-afilado/
 ├── README.md                 <- este archivo
 ├── requirements.txt          <- librerias de la maquina de ENTRENAMIENTO
-├── requirements-taller.txt   <- librerias de la PC del TALLER (sin torch, 252 MB)
+├── requirements-taller.txt   <- librerias de la PC del TALLER (sin torch, 281 MB)
 ├── configs/
 │   └── config.yaml           <- TODOS los ajustes. Es lo unico que se toca a mano.
 ├── models/

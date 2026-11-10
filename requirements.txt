@@ -22,6 +22,7 @@
 opencv-contrib-python>=4.8,<5.0
 numpy>=1.24,<3.0
 pyyaml>=6.0
+pillow>=10.0
 ultralytics>=8.3.0
 
 # Tests. La suite de tests/ no necesita torch: verifica la matematica de medicion,

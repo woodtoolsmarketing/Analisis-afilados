@@ -54,7 +54,8 @@ _EXCLUIR = (
     "polars",
     "sympy",
     "networkx",
-    "PIL",
+    # PIL NO va aca: Pillow es lo que dibuja la tipografia de la pantalla. Excluirlo
+    # dejaba el .exe cayendo a las fuentes Hershey, que es lo que se quiso evitar.
     "tkinter",
     "pytest",
     "IPython",
