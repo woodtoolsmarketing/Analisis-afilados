@@ -322,8 +322,6 @@ def componer(
 # porcentajes por clase, sin nombres de modelo, sin jerga. Dos palabras.
 # ---------------------------------------------------------------------------
 
-_ALTO_RESULTADO = 150     # el cartel de abajo, el elemento mas grande de la pantalla
-_ALTO_TITULO = 42         # la franja con SIERRA / MODELO APROBADO
 
 
 def coincidencia(veredicto: Optional[Veredicto], cfg: AppConfig) -> Optional[float]:
@@ -417,7 +415,17 @@ def _cartel_resultado(
 # Todo lo que ocupa el lienzo ADEMAS de los recuadros de imagen: titulos, la palabra
 # RESULTADO, el cartel y la fila de botones. Se usa para despejar cuanto alto le queda a los
 # recuadros cuando hay que entrar en una pantalla chica.
-_ALTO_FIJO_SIMPLE = _ALTO_TITULO + _MARGEN + 34 + _ALTO_RESULTADO + _MARGEN + 70
+# Medidas de la pantalla simple. Estan juntas aca porque el alto total depende de ellas:
+# cuando el lienzo no entra en el monitor, lo que se achica es el RECUADRO de imagen y
+# estas franjas se respetan enteras.
+_ALTO_CABECERA = 46       # la fila con SIERRA / MODELO APROBADO
+_ALTO_RESULTADO = 136     # la tarjeta del veredicto
+_ALTO_BOTONES = 76        # la fila de botones
+_MARGEN_SIMPLE = 18
+
+_ALTO_FIJO_SIMPLE = (
+    _ALTO_CABECERA + 3 * _MARGEN_SIMPLE + _ALTO_RESULTADO + _ALTO_BOTONES
+)
 
 # Por debajo de esto los recuadros no muestran nada util: antes que seguir achicandolos
 # --o peor, achicar el cartel de resultado y los botones, que es lo que hay que leer y
@@ -428,6 +436,133 @@ _ALTO_MINIMO_PANEL = 180
 ALTO_MINIMO_LIENZO = _ALTO_FIJO_SIMPLE + _ALTO_MINIMO_PANEL
 
 
+# ---------------------------------------------------------------------------
+# PALETA Y PRIMITIVAS DEL REDISENO
+# ---------------------------------------------------------------------------
+
+# Todo en BGR, que es como los quiere OpenCV.
+_FONDO = (26, 21, 17)            # azul petroleo muy oscuro, no negro puro
+_SUPERFICIE = (40, 33, 28)       # las tarjetas, apenas mas claras que el fondo
+_BORDE = (62, 52, 44)            # borde sutil, para separar sin gritar
+_TEXTO = (240, 238, 232)
+_TEXTO_TENUE = (168, 155, 139)
+_VERDE_OK = (88, 170, 70)        # verde contenido: se lee de lejos sin vibrar
+_ROJO_NO = (60, 50, 220)
+_AMBAR = (20, 160, 235)
+_AZUL = (200, 130, 40)
+_FUENTE_TITULO = cv2.FONT_HERSHEY_DUPLEX   # doble trazo: menos "dibujo tecnico"
+
+
+def _rect_redondeado(
+    img: np.ndarray,
+    pt1: tuple[int, int],
+    pt2: tuple[int, int],
+    color,
+    radio: int = 12,
+    grosor: int = -1,
+) -> None:
+    """Rectangulo con esquinas redondeadas. OpenCV no trae uno."""
+    x1, y1 = pt1
+    x2, y2 = pt2
+    radio = max(0, min(radio, (x2 - x1) // 2, (y2 - y1) // 2))
+    if radio == 0:
+        cv2.rectangle(img, pt1, pt2, color, grosor, cv2.LINE_AA)
+        return
+    if grosor < 0:
+        cv2.rectangle(img, (x1 + radio, y1), (x2 - radio, y2), color, -1, cv2.LINE_AA)
+        cv2.rectangle(img, (x1, y1 + radio), (x2, y2 - radio), color, -1, cv2.LINE_AA)
+    else:
+        cv2.line(img, (x1 + radio, y1), (x2 - radio, y1), color, grosor, cv2.LINE_AA)
+        cv2.line(img, (x1 + radio, y2), (x2 - radio, y2), color, grosor, cv2.LINE_AA)
+        cv2.line(img, (x1, y1 + radio), (x1, y2 - radio), color, grosor, cv2.LINE_AA)
+        cv2.line(img, (x2, y1 + radio), (x2, y2 - radio), color, grosor, cv2.LINE_AA)
+    for cx, cy, a1, a2 in (
+        (x1 + radio, y1 + radio, 180, 270),
+        (x2 - radio, y1 + radio, 270, 360),
+        (x1 + radio, y2 - radio, 90, 180),
+        (x2 - radio, y2 - radio, 0, 90),
+    ):
+        cv2.ellipse(img, (cx, cy), (radio, radio), 0, a1, a2, color, grosor, cv2.LINE_AA)
+
+
+def _tarjeta(img: np.ndarray, pt1, pt2, relleno=_SUPERFICIE, radio: int = 14) -> None:
+    """Una superficie elevada: relleno mas claro que el fondo, con borde sutil."""
+    _rect_redondeado(img, pt1, pt2, relleno, radio, -1)
+    _rect_redondeado(img, pt1, pt2, _BORDE, radio, 1)
+
+
+def _icono_veredicto(img: np.ndarray, centro, radio: int, aprobado: Optional[bool], color) -> None:
+    """Tilde, cruz o reloj segun el veredicto.
+
+    La forma importa tanto como el color: a tres metros se reconoce antes que la palabra,
+    y para alguien que no distingue bien rojo de verde es la unica senal que queda.
+    """
+    cx, cy = centro
+    cv2.circle(img, (cx, cy), radio, color, -1, cv2.LINE_AA)
+    cv2.circle(img, (cx, cy), radio, _TEXTO, 2, cv2.LINE_AA)
+    grosor = max(3, radio // 6)
+    if aprobado is True:
+        cv2.line(img, (cx - radio // 2, cy), (cx - radio // 8, cy + radio // 2),
+                 _TEXTO, grosor, cv2.LINE_AA)
+        cv2.line(img, (cx - radio // 8, cy + radio // 2), (cx + radio // 2, cy - radio // 2),
+                 _TEXTO, grosor, cv2.LINE_AA)
+    elif aprobado is False:
+        d = radio // 2
+        cv2.line(img, (cx - d, cy - d), (cx + d, cy + d), _TEXTO, grosor, cv2.LINE_AA)
+        cv2.line(img, (cx + d, cy - d), (cx - d, cy + d), _TEXTO, grosor, cv2.LINE_AA)
+    else:
+        cv2.line(img, (cx, cy - radio // 2), (cx, cy), _TEXTO, grosor, cv2.LINE_AA)
+        cv2.line(img, (cx, cy), (cx + radio // 3, cy + radio // 3), _TEXTO, grosor, cv2.LINE_AA)
+
+
+def _barra_coincidencia(
+    img: np.ndarray, x1: int, y: int, x2: int, valor: float, umbral: float, color
+) -> None:
+    """Barra de coincidencia con una marca en el umbral.
+
+    Dice algo que el porcentaje suelto no decia: si paso raspando o de sobra.
+    """
+    alto = 14
+    _rect_redondeado(img, (x1, y), (x2, y + alto), _FONDO, alto // 2, -1)
+    ancho = x2 - x1
+    lleno = int(ancho * max(0.0, min(1.0, valor)))
+    if lleno > alto:
+        _rect_redondeado(img, (x1, y), (x1 + lleno, y + alto), color, alto // 2, -1)
+    marca = x1 + int(ancho * max(0.0, min(1.0, umbral)))
+    cv2.line(img, (marca, y - 5), (marca, y + alto + 5), _TEXTO, 2, cv2.LINE_AA)
+
+
+def estado_resultado(
+    estado: EstadoRevision, cfg: AppConfig
+) -> tuple[str, str, tuple, Optional[bool]]:
+    """(titulo, detalle, color, aprobado) del cartel de resultado.
+
+    Aparte para poder probar la DECISION sin tener que leer pixeles de una imagen.
+    """
+    if not estado.congelado:
+        return "ESPERANDO", "apriete REVISAR", _SUPERFICIE, None
+    valor = coincidencia(estado.veredicto, cfg)
+    if valor is None:
+        return "SIN MODELO", "todavia no hay modelo entrenado", _AMBAR, None
+    umbral = float(cfg.interfaz.umbral_aprobacion)
+    if valor >= umbral:
+        return "APROBADO", f"coincidencia {valor * 100:.0f}%", _VERDE_OK, True
+    return "DESAPROBADO", f"coincidencia {valor * 100:.0f}%", _ROJO_NO, False
+
+
+def _boton_lindo(
+    img: np.ndarray, x: int, y1: int, y2: int, texto: str, color, escala: float = 0.78
+) -> Rect:
+    """Boton redondeado que se adapta a su texto."""
+    ancho_texto, alto_texto, _ = _tamano_texto(texto, escala)
+    x2 = x + ancho_texto + 2 * _RELLENO_BOTON
+    _rect_redondeado(img, (x, y1), (x2, y2), color, 10, -1)
+    cy = y1 + (y2 - y1 + alto_texto) // 2 - 6
+    cv2.putText(img, texto, (x + _RELLENO_BOTON, cy), _FUENTE_TITULO, escala,
+                _color_texto(color), 1, cv2.LINE_AA)
+    return (x, y1, x2, y2)
+
+
 def componer_simple(
     vivo: np.ndarray,
     referencia: Optional[np.ndarray],
@@ -435,113 +570,109 @@ def componer_simple(
     estado: EstadoRevision,
     alto_maximo: Optional[int] = None,
 ) -> Pantalla:
-    """La pantalla del taller: la sierra, el modelo, y abajo el resultado en dos palabras.
-
-    `alto_maximo` es el alto de pantalla disponible. Si el lienzo no entra, se achican los
-    RECUADROS --nunca el cartel de resultado ni los botones, que son lo que hay que leer y
-    apretar--. Asi la imagen se dibuja 1 a 1 y no la reescala la ventana, que es lo que
-    dejaba la fila de botones cortada.
-    """
-    ancho_panel = (ANCHO_LIENZO - 3 * _MARGEN) // 2
+    """La pantalla del taller: la sierra, el modelo y el resultado en dos palabras."""
+    margen = _MARGEN_SIMPLE
+    alto_cabecera, alto_resultado, alto_botones = (
+        _ALTO_CABECERA, _ALTO_RESULTADO, _ALTO_BOTONES,
+    )
+    ancho_panel = (ANCHO_LIENZO - 3 * margen) // 2
     alto_img, ancho_img = vivo.shape[:2]
     alto_panel = max(220, int(ancho_panel * alto_img / max(1, ancho_img)))
 
     if alto_maximo is not None:
-        disponible = int(alto_maximo) - _ALTO_FIJO_SIMPLE
-        alto_panel = max(_ALTO_MINIMO_PANEL, min(alto_panel, disponible))
+        alto_panel = max(
+            _ALTO_MINIMO_PANEL, min(alto_panel, int(alto_maximo) - _ALTO_FIJO_SIMPLE)
+        )
 
-    alto_total = (
-        _ALTO_TITULO + alto_panel + _MARGEN + 34 + _ALTO_RESULTADO + _MARGEN + 70
-    )
-    lienzo = np.full((alto_total, ANCHO_LIENZO, 3), 24, np.uint8)
+    alto_total = _ALTO_FIJO_SIMPLE + alto_panel
+    lienzo = np.full((alto_total, ANCHO_LIENZO, 3), _FONDO, np.uint8)
 
-    x_izq, x_der = _MARGEN, 2 * _MARGEN + ancho_panel
+    x_izq, x_der = margen, 2 * margen + ancho_panel
+    y_panel = alto_cabecera
 
-    # --- titulos de cada recuadro, grandes ---
+    # --- cabecera: titulos de cada columna ---
     for x, titulo in ((x_izq, "SIERRA"), (x_der, "MODELO APROBADO")):
-        ancho_t, alto_t, _ = _tamano_texto(titulo, 0.9)
-        cv2.putText(
-            lienzo,
-            titulo,
-            (x + max(0, (ancho_panel - ancho_t) // 2), _ALTO_TITULO - 12),
-            _FUENTE,
-            0.9,
-            _BLANCO,
-            2,
-            cv2.LINE_AA,
-        )
+        ancho_t, _, _ = _tamano_texto(titulo, 0.62)
+        cv2.putText(lienzo, titulo, (x + (ancho_panel - ancho_t) // 2, alto_cabecera - 16),
+                    _FUENTE_TITULO, 0.62, _TEXTO_TENUE, 1, cv2.LINE_AA)
 
-    y_panel = _ALTO_TITULO
-    lienzo[y_panel : y_panel + alto_panel, x_izq : x_izq + ancho_panel] = _encajar(
-        vivo, ancho_panel, alto_panel
-    )
-    if referencia is not None:
-        lienzo[y_panel : y_panel + alto_panel, x_der : x_der + ancho_panel] = _encajar(
-            referencia, ancho_panel, alto_panel
-        )
-    else:
-        cv2.rectangle(
-            lienzo,
-            (x_der, y_panel),
-            (x_der + ancho_panel, y_panel + alto_panel),
-            (45, 45, 45),
-            cv2.FILLED,
-        )
-        for indice, linea in enumerate(
-            ("Falta la foto del modelo.", "", "Pone una pieza buena y", "apreta la tecla  f")
-        ):
-            if not linea:
-                continue
-            cv2.putText(
-                lienzo,
-                linea,
-                (x_der + 24, y_panel + 60 + indice * 40),
-                _FUENTE,
-                0.75,
-                _GRIS_CLARO,
-                2,
-                cv2.LINE_AA,
+    # --- tarjetas con las dos imagenes ---
+    for x, imagen in ((x_izq, vivo), (x_der, referencia)):
+        _tarjeta(lienzo, (x - 3, y_panel - 3), (x + ancho_panel + 3, y_panel + alto_panel + 3))
+        if imagen is not None:
+            lienzo[y_panel : y_panel + alto_panel, x : x + ancho_panel] = _encajar(
+                imagen, ancho_panel, alto_panel
             )
+        else:
+            for i, linea in enumerate(("Falta la foto del modelo.", "",
+                                       "Pone una pieza buena", "y apreta la tecla  f")):
+                if not linea:
+                    continue
+                cv2.putText(lienzo, linea, (x + 26, y_panel + 58 + i * 36),
+                            _FUENTE_TITULO, 0.6, _TEXTO_TENUE, 1, cv2.LINE_AA)
 
     if estado.congelado:
-        texto_con_fondo(lienzo, "CONGELADA", (x_izq + 6, y_panel + 6), _NEGRO, 0.6)
+        _rect_redondeado(lienzo, (x_izq + 10, y_panel + 10), (x_izq + 142, y_panel + 42),
+                         _FONDO, 8, -1)
+        cv2.putText(lienzo, "CONGELADA", (x_izq + 20, y_panel + 32), _FUENTE_TITULO,
+                    0.5, _TEXTO, 1, cv2.LINE_AA)
 
-    # --- el cartel RESULTADO, abajo de los DOS recuadros ---
-    _cartel_resultado(lienzo, y_panel + alto_panel + _MARGEN, estado, cfg)
+    # --- tarjeta de resultado ---
+    titulo, detalle, color, aprobado = estado_resultado(estado, cfg)
+    y_res = y_panel + alto_panel + margen
+    _tarjeta(lienzo, (margen, y_res), (ANCHO_LIENZO - margen, y_res + alto_resultado),
+             _SUPERFICIE, 16)
+
+    radio = alto_resultado // 2 - 22
+    cx = margen + 30 + radio
+    cy = y_res + alto_resultado // 2
+    _icono_veredicto(lienzo, (cx, cy), radio, aprobado, color)
+
+    x_texto = cx + radio + 34
+    escala = 1.9
+    ancho_t, alto_t, _ = _tamano_texto(titulo, escala)
+    while x_texto + ancho_t > ANCHO_LIENZO - margen - 30 and escala > 0.8:
+        escala -= 0.1
+        ancho_t, alto_t, _ = _tamano_texto(titulo, escala)
+    cv2.putText(lienzo, titulo, (x_texto, cy + 2), _FUENTE_TITULO, escala,
+                color if aprobado is not None else _TEXTO, 2, cv2.LINE_AA)
+    cv2.putText(lienzo, detalle, (x_texto + 3, cy + 34), _FUENTE_TITULO, 0.56,
+                _TEXTO_TENUE, 1, cv2.LINE_AA)
+
+    valor = coincidencia(estado.veredicto, cfg) if estado.congelado else None
+    if valor is not None:
+        _barra_coincidencia(lienzo, x_texto + 3, cy + 48, ANCHO_LIENZO - margen - 30,
+                            valor, float(cfg.interfaz.umbral_aprobacion), color)
+        texto_umbral = f"minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%"
+        ancho_u, _, _ = _tamano_texto(texto_umbral, 0.46)
+        cv2.putText(lienzo, texto_umbral, (ANCHO_LIENZO - margen - 30 - ancho_u, cy + 86),
+                    _FUENTE_TITULO, 0.46, _TEXTO_TENUE, 1, cv2.LINE_AA)
 
     # --- botones ---
-    y1 = alto_total - 62
-    y2 = y1 + 50
+    y1 = alto_total - alto_botones + 14
+    y2 = y1 + 48
     botones: dict[str, Rect] = {}
     if estado.congelado:
-        botones["seguir"] = _dibujar_boton(lienzo, _MARGEN, y1, y2, "OTRA PIEZA", _GRIS)
-        x = botones["seguir"][2] + _MARGEN
-        botones["aprobada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR BUENA", _VERDE)
-        x = botones["aprobada"][2] + _MARGEN
-        botones["rechazada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR MALA", _ROJO)
+        botones["seguir"] = _boton_lindo(lienzo, margen, y1, y2, "OTRA PIEZA", _SUPERFICIE)
+        x = botones["seguir"][2] + 12
+        botones["aprobada"] = _boton_lindo(lienzo, x, y1, y2, "GUARDAR BUENA", _VERDE_OK)
+        x = botones["aprobada"][2] + 12
+        botones["rechazada"] = _boton_lindo(lienzo, x, y1, y2, "GUARDAR MALA", _ROJO_NO)
     else:
-        botones["revisar"] = _dibujar_boton(
-            lienzo, _MARGEN, y1, y2, "REVISAR", (150, 90, 0), 1.0
-        )
+        botones["revisar"] = _boton_lindo(lienzo, margen, y1, y2, "REVISAR", _AZUL, 0.95)
 
-    ancho_salir, _, _ = _tamano_texto("SALIR", 0.85)
-    botones["salir"] = _dibujar_boton(
-        lienzo,
-        ANCHO_LIENZO - _MARGEN - ancho_salir - 2 * _RELLENO_BOTON,
-        y1,
-        y2,
-        "SALIR",
-        (40, 40, 120),
+    ancho_salir, _, _ = _tamano_texto("SALIR", 0.78)
+    botones["salir"] = _boton_lindo(
+        lienzo, ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON, y1, y2,
+        "SALIR", _SUPERFICIE,
     )
 
     if estado.mensaje:
-        ancho_msg, alto_msg, _ = _tamano_texto(estado.mensaje, 0.7)
-        texto_con_fondo(
-            lienzo,
-            estado.mensaje,
-            ((ANCHO_LIENZO - ancho_msg) // 2, y_panel + alto_panel - alto_msg - 10),
-            _VERDE,
-            0.7,
-        )
+        ancho_m, alto_m, _ = _tamano_texto(estado.mensaje, 0.68)
+        x_m = (ANCHO_LIENZO - ancho_m) // 2
+        _rect_redondeado(lienzo, (x_m - 16, y_panel + alto_panel - alto_m - 26),
+                         (x_m + ancho_m + 16, y_panel + alto_panel - 10), _VERDE_OK, 10, -1)
+        cv2.putText(lienzo, estado.mensaje, (x_m, y_panel + alto_panel - 20),
+                    _FUENTE_TITULO, 0.68, _TEXTO, 1, cv2.LINE_AA)
 
     return Pantalla(imagen=lienzo, botones=botones)

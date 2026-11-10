@@ -211,32 +211,52 @@ def test_un_veredicto_sin_desglose_igual_dice_algo(cfg: AppConfig) -> None:
     assert revision.coincidencia(defectuosa, cfg) == pytest.approx(0.1)
 
 
-def _color_del_cartel(pantalla) -> tuple[int, int, int]:
-    """Lee el color de fondo del cartel RESULTADO, abajo al centro."""
-    alto, ancho = pantalla.imagen.shape[:2]
-    # el cartel ocupa la franja de abajo, arriba de los botones
-    fila = alto - 62 - revision._ALTO_RESULTADO // 2
-    return tuple(int(v) for v in pantalla.imagen[fila, 40])
+def _color_pintado(pantalla, color) -> bool:
+    """True si ese color aparece de verdad en la franja del resultado.
+
+    Se busca en toda la franja en vez de leer un pixel fijo: asi el test sigue valiendo
+    cuando cambia el diseno, que es justo lo que paso. Lo que importa no es DONDE esta el
+    verde sino que el verde este.
+    """
+    # SOLO la tarjeta de resultado: la fila de botones de abajo tiene un boton verde y uno
+    # rojo fijos, asi que incluirla daria siempre positivo para los dos colores.
+    desde = -(revision._ALTO_BOTONES + revision._MARGEN_SIMPLE + revision._ALTO_RESULTADO)
+    hasta = -(revision._ALTO_BOTONES + revision._MARGEN_SIMPLE)
+    tarjeta = pantalla.imagen[desde:hasta]
+    return bool(np.any(np.all(np.abs(tarjeta.astype(int) - np.array(color)) < 14, axis=2)))
 
 
 @pytest.mark.parametrize(
-    "probabilidad, espera_verde",
+    "probabilidad, espera_aprobado",
     [(1.0, True), (0.85, True), (0.70, True), (0.6999, False), (0.5, False), (0.0, False)],
 )
-def test_el_umbral_decide_el_color_del_cartel(
-    cfg: AppConfig, probabilidad: float, espera_verde: bool
+def test_el_umbral_decide_el_veredicto(
+    cfg: AppConfig, probabilidad: float, espera_aprobado: bool
 ) -> None:
     """70% justo cuenta como APROBADO: el umbral es "al menos", no "mas de"."""
     cfg.interfaz.umbral_aprobacion = 0.70
     estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(probabilidad))
 
-    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
-    azul, verde, rojo = _color_del_cartel(pantalla)
+    titulo, _, color, aprobado = revision.estado_resultado(estado, cfg)
 
-    if espera_verde:
-        assert verde > 120 and rojo < 80, f"deberia ser verde y dio {(azul, verde, rojo)}"
-    else:
-        assert rojo > 120 and verde < 80, f"deberia ser rojo y dio {(azul, verde, rojo)}"
+    assert aprobado is espera_aprobado
+    assert titulo == ("APROBADO" if espera_aprobado else "DESAPROBADO")
+    assert color == (revision._VERDE_OK if espera_aprobado else revision._ROJO_NO)
+
+
+@pytest.mark.parametrize("probabilidad, espera_aprobado", [(0.95, True), (0.2, False)])
+def test_el_color_del_veredicto_se_pinta_de_verdad(
+    cfg: AppConfig, probabilidad: float, espera_aprobado: bool
+) -> None:
+    """El color es lo unico que el operario mira de lejos: tiene que estar en la imagen."""
+    estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(probabilidad))
+    _, _, color, _ = revision.estado_resultado(estado, cfg)
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
+
+    assert _color_pintado(pantalla, color)
+    contrario = revision._ROJO_NO if espera_aprobado else revision._VERDE_OK
+    assert not _color_pintado(pantalla, contrario), "se pinto tambien el color opuesto"
 
 
 def test_el_umbral_se_puede_mover(cfg: AppConfig) -> None:
@@ -244,21 +264,21 @@ def test_el_umbral_se_puede_mover(cfg: AppConfig) -> None:
     estado = revision.EstadoRevision(congelado=True, veredicto=_veredicto(0.75))
 
     cfg.interfaz.umbral_aprobacion = 0.70
-    verde = _color_del_cartel(revision.componer_simple(_imagen(), _imagen(), cfg, estado))
+    assert revision.estado_resultado(estado, cfg)[3] is True
     cfg.interfaz.umbral_aprobacion = 0.90
-    rojo = _color_del_cartel(revision.componer_simple(_imagen(), _imagen(), cfg, estado))
-
-    assert verde[1] > 120, "con umbral 70 una pieza al 75% tiene que aprobar"
-    assert rojo[2] > 120, "con umbral 90 la misma pieza tiene que desaprobar"
+    assert revision.estado_resultado(estado, cfg)[3] is False
 
 
 def test_antes_de_revisar_no_dice_ni_aprobado_ni_desaprobado(cfg: AppConfig) -> None:
     """En vivo el cartel esta en gris: dar un veredicto sin que se lo pidan seria juzgar
     una imagen que el operario todavia no encuadro."""
-    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, revision.EstadoRevision())
-    azul, verde, rojo = _color_del_cartel(pantalla)
+    estado = revision.EstadoRevision()
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado)
 
-    assert verde < 120 and rojo < 120
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+    assert titulo == "ESPERANDO" and aprobado is None
+    assert not _color_pintado(pantalla, revision._VERDE_OK)
+    assert not _color_pintado(pantalla, revision._ROJO_NO)
     assert set(pantalla.botones) == {"revisar", "salir"}
 
 
