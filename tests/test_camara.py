@@ -105,3 +105,94 @@ def test_un_backend_desconocido_se_rechaza_con_las_opciones() -> None:
     """Un typo en el config no puede quedar en silencio usando otro backend."""
     with pytest.raises(ValueError, match="dshhow"):
         _resolver_backend("dshhow", True)
+
+
+# ---------------------------------------------------------------------------
+# Apertura de punta a punta. Con un ARCHIVO de video, que recorre el mismo
+# camino que una camara --abrir, releer resolucion, leer, cerrar-- sin
+# necesitar hardware. La suite tiene que correr en maquinas sin webcam, pero
+# dejar ese camino sin probar significa que un error ahi solo aparece en el
+# taller: paso exactamente eso con un rename que rompio _releer_resolucion.
+# ---------------------------------------------------------------------------
+
+
+def _video_de_prueba(ruta, cuadros: int = 8, ancho: int = 64, alto: int = 48):
+    import numpy as np
+
+    escritor = cv2.VideoWriter(
+        str(ruta), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (ancho, alto)
+    )
+    assert escritor.isOpened(), "no se pudo crear el video de prueba"
+    for i in range(cuadros):
+        escritor.write(np.full((alto, ancho, 3), 20 + i * 10, np.uint8))
+    escritor.release()
+    return ruta
+
+
+def test_abrir_leer_y_cerrar_un_video(tmp_path) -> None:
+    ruta = _video_de_prueba(tmp_path / "prueba.mp4")
+
+    camara = Camara(CamaraConfig(fuente=str(ruta)))
+    camara.abrir()
+    try:
+        assert camara.abierta
+        assert camara.resolucion_real == (64, 48), "no releyo la resolucion real"
+        frame = camara.leer()
+        assert frame is not None and frame.shape[:2] == (48, 64)
+        assert "prueba.mp4" in camara.descripcion
+    finally:
+        camara.cerrar()
+
+    assert not camara.abierta
+
+
+def test_cerrar_es_idempotente(tmp_path) -> None:
+    ruta = _video_de_prueba(tmp_path / "prueba.mp4")
+    camara = Camara(CamaraConfig(fuente=str(ruta)))
+    camara.abrir()
+
+    camara.cerrar()
+    camara.cerrar()
+
+    assert not camara.abierta
+
+
+def test_el_video_se_termina_y_devuelve_none(tmp_path) -> None:
+    """Un archivo que se acaba es un final normal, no una averia."""
+    ruta = _video_de_prueba(tmp_path / "corto.mp4", cuadros=3)
+    camara = Camara(CamaraConfig(fuente=str(ruta)))
+    camara.abrir()
+    try:
+        leidos = 0
+        for _ in range(20):
+            if camara.leer() is None:
+                break
+            leidos += 1
+        assert 0 < leidos <= 5
+    finally:
+        camara.cerrar()
+
+
+def test_voltear_horizontal_se_aplica(tmp_path) -> None:
+    import numpy as np
+
+    ruta = tmp_path / "asimetrico.mp4"
+    escritor = cv2.VideoWriter(str(ruta), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 48))
+    cuadro = np.zeros((48, 64, 3), np.uint8)
+    cuadro[:, :20] = 255  # franja blanca a la IZQUIERDA
+    for _ in range(4):
+        escritor.write(cuadro)
+    escritor.release()
+
+    normal = Camara(CamaraConfig(fuente=str(ruta)))
+    normal.abrir()
+    izquierda_normal = float(normal.leer()[:, :20].mean())
+    normal.cerrar()
+
+    volteada = Camara(CamaraConfig(fuente=str(ruta), voltear_horizontal=True))
+    volteada.abrir()
+    izquierda_volteada = float(volteada.leer()[:, :20].mean())
+    volteada.cerrar()
+
+    assert izquierda_normal > 200, "la franja tenia que estar a la izquierda"
+    assert izquierda_volteada < 60, "al voltear, la franja tiene que pasar a la derecha"

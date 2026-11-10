@@ -256,6 +256,64 @@ class Camara:
         self._captura: Optional[cv2.VideoCapture] = None
         self._ancho_real = 0
         self._alto_real = 0
+        self._silencioso = False
+        self._avisos_guardados: list[tuple[str, tuple]] = []
+        self._informes_guardados: list[tuple[str, tuple]] = []
+
+    def _configurar(self, captura: cv2.VideoCapture, silencioso: bool = False) -> None:
+        """Aplica formato, enfoque, exposicion, brillo y ganancia a una captura recien
+        abierta. Se llama ANTES de leerle ningun frame; ver _intentar_abrir.
+
+        `silencioso` calla los avisos mientras se SONDEA. Sin eso, el log se llena de
+        quejas sobre camaras que ni siquiera se van a usar --la virtual no acepta brillo ni
+        ganancia-- y el operario termina leyendo advertencias de una camara descartada
+        mientras busca por que fallo la que importa.
+        """
+        self._silencioso = silencioso
+        if silencioso:
+            self._avisos_guardados = []
+            self._informes_guardados = []
+        try:
+            self._aplicar_formato(captura)
+            self._aplicar_enfoque(captura)
+            self._aplicar_exposicion(captura)
+            self._aplicar_brillo_y_ganancia(captura)
+        finally:
+            self._silencioso = False
+
+    def _avisar(self, mensaje: str, *args: object) -> None:
+        """Advertencia que, mientras se sondea, se GUARDA en vez de emitirse.
+
+        Se emiten recien cuando se elige esa camara. Asi el log no se llena de quejas de
+        camaras descartadas --la virtual no acepta brillo ni ganancia-- pero no se pierde
+        ni una advertencia de la que si se va a usar.
+        """
+        if getattr(self, "_silencioso", False):
+            self._avisos_guardados.append((mensaje, args))
+        else:
+            _log.warning(mensaje, *args)
+
+    def _informar(self, mensaje: str, *args: object) -> None:
+        """Como _avisar pero a nivel informativo: tambien se guarda mientras se sondea."""
+        if getattr(self, "_silencioso", False):
+            self._informes_guardados.append((mensaje, args))
+        else:
+            _log.info(mensaje, *args)
+
+    def _emitir_avisos_guardados(self) -> None:
+        for mensaje, args in self._informes_guardados:
+            _log.info(mensaje, *args)
+        self._informes_guardados = []
+        for mensaje, args in self._avisos_guardados:
+            _log.warning(mensaje, *args)
+        self._avisos_guardados = []
+
+    @staticmethod
+    def _formato_valido(captura: cv2.VideoCapture) -> bool:
+        """False si la captura informa 0x0: es un handle zombi, no va a entregar nada."""
+        ancho = int(round(captura.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        alto = int(round(captura.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        return ancho > 0 and alto > 0
 
     def _backends_candidatos(self) -> tuple[int, ...]:
         if self._backend_explicito:
@@ -319,10 +377,25 @@ class Camara:
                 continue
             captura = cv2.VideoCapture(indice, backend)
             if captura.isOpened():
-                # Se insiste varias veces, igual que en el sondeo. El microscopio USB del
-                # taller tarda hasta media docena de frames en entregar el primero: leer una
-                # sola vez descartaba una camara que funciona perfecto, y el programa
-                # terminaba diciendo "no se pudo abrir" con la camara sana y enchufada.
+                # ANTES de leer un solo frame. Estas camaras se rompen si se les cambia el
+                # formato con el stream ya andando: dejan de entregar e informan 0x0. El
+                # chequeo de imagen congelada lee varios frames, asi que configurar despues
+                # de el llegaba siempre tarde.
+                if self._es_camara:
+                    self._configurar(captura, silencioso=True)
+                    if not self._formato_valido(captura):
+                        _log.info(
+                            "el indice %d informa una resolucion de 0x0 despues de "
+                            "configurarlo; se descarta y se sigue buscando",
+                            indice,
+                        )
+                        captura.release()
+                        time.sleep(_PAUSA_ENTRE_SONDEOS)
+                        continue
+
+                # Se insiste varias veces en leer. El microscopio USB del taller tarda hasta
+                # media docena de frames en entregar el primero: leer una sola vez
+                # descartaba una camara que funciona perfecto.
                 exito, frame = False, None
                 for _ in range(_INTENTOS_LECTURA_SONDEO):
                     exito, frame = captura.read()
@@ -352,6 +425,9 @@ class Camara:
                             "auto" if self._auto else str(pedido[0]),
                         )
                     self._fuente, self._backend = indice, backend
+                    # Los avisos se EMITEN aca, no se reconfigura: volver a tocar el
+                    # formato con el stream andando es justo lo que rompe estas camaras.
+                    self._emitir_avisos_guardados()
                     return captura
             captura.release()
 
@@ -365,6 +441,8 @@ class Camara:
             )
             captura = cv2.VideoCapture(indice, backend)
             if captura.isOpened():
+                if self._es_camara:
+                    self._configurar(captura)
                 for _ in range(_INTENTOS_LECTURA_SONDEO):
                     exito, frame = captura.read()
                     if exito and frame is not None:
@@ -387,11 +465,9 @@ class Camara:
                 raise RuntimeError(self._mensaje_no_abre())
 
         self._captura = captura
-        if self._es_camara:
-            self._aplicar_formato()
-            self._aplicar_enfoque()
-            self._aplicar_exposicion()
-            self._aplicar_brillo_y_ganancia()
+        if not self._es_camara:
+            # Los archivos y streams no se configuran: no tienen formato que negociar.
+            pass
         self._releer_resolucion()
 
         if self._es_camara and (
@@ -435,48 +511,45 @@ class Camara:
             f"{nombre_backend}. Verifique que la ruta exista y que el formato sea legible."
         )
 
-    def _aplicar_formato(self) -> None:
-        assert self._captura is not None
+    def _aplicar_formato(self, captura: cv2.VideoCapture) -> None:
         # MJPG antes que la resolucion: sin el, muchas webcam UVC limitan 1280x720 a 5 fps
         # porque intentan entregar YUYV sin comprimir.
-        self._captura.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self._captura.set(cv2.CAP_PROP_FRAME_WIDTH, float(self._cfg.ancho))
-        self._captura.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self._cfg.alto))
-        self._captura.set(cv2.CAP_PROP_FPS, float(self._cfg.fps))
+        captura.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        captura.set(cv2.CAP_PROP_FRAME_WIDTH, float(self._cfg.ancho))
+        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self._cfg.alto))
+        captura.set(cv2.CAP_PROP_FPS, float(self._cfg.fps))
 
-    def _aplicar_enfoque(self) -> None:
-        assert self._captura is not None
+    def _aplicar_enfoque(self, captura: cv2.VideoCapture) -> None:
         if self._cfg.autofocus:
-            self._captura.set(cv2.CAP_PROP_AUTOFOCUS, 1.0)
-            _log.warning(
+            captura.set(cv2.CAP_PROP_AUTOFOCUS, 1.0)
+            self._avisar(
                 "Autofoco ACTIVO: cada reenfoque cambia la escala mm/px y falsea las medidas. "
                 "Para medir, use autofocus=false y fije 'enfoque'."
             )
             return
-        if not self._captura.set(cv2.CAP_PROP_AUTOFOCUS, 0.0):
-            _log.warning(
+        if not captura.set(cv2.CAP_PROP_AUTOFOCUS, 0.0):
+            self._avisar(
                 "La camara no acepta desactivar el autofoco por software; "
                 "desactivelo desde el panel del fabricante o las medidas van a derivar."
             )
         if self._cfg.enfoque is not None:
-            if not self._captura.set(cv2.CAP_PROP_FOCUS, float(self._cfg.enfoque)):
-                _log.warning(
+            if not captura.set(cv2.CAP_PROP_FOCUS, float(self._cfg.enfoque)):
+                self._avisar(
                     "La camara no acepta fijar el enfoque en %s por software.",
                     self._cfg.enfoque,
                 )
 
-    def _aplicar_exposicion(self) -> None:
-        assert self._captura is not None
+    def _aplicar_exposicion(self, captura: cv2.VideoCapture) -> None:
         if self._cfg.exposicion is None:
             return
-        self._captura.set(cv2.CAP_PROP_AUTO_EXPOSURE, _EXPOSICION_MANUAL)
-        if not self._captura.set(cv2.CAP_PROP_EXPOSURE, float(self._cfg.exposicion)):
-            _log.warning(
+        captura.set(cv2.CAP_PROP_AUTO_EXPOSURE, _EXPOSICION_MANUAL)
+        if not captura.set(cv2.CAP_PROP_EXPOSURE, float(self._cfg.exposicion)):
+            self._avisar(
                 "La camara no acepta fijar la exposicion en %s por software.",
                 self._cfg.exposicion,
             )
 
-    def _aplicar_brillo_y_ganancia(self) -> None:
+    def _aplicar_brillo_y_ganancia(self, captura: cv2.VideoCapture) -> None:
         """Sube brillo y ganancia si el config los pide.
 
         En el microscopio USB del taller la imagen llega casi negra con los valores de
@@ -488,23 +561,22 @@ class Camara:
         reentrenar ya sale bien expuesto. Corregirlo en software despues solo estiraria el
         ruido de una imagen que nunca tuvo la informacion.
         """
-        assert self._captura is not None
         for nombre, propiedad, valor in (
             ("brillo", cv2.CAP_PROP_BRIGHTNESS, self._cfg.brillo),
             ("ganancia", cv2.CAP_PROP_GAIN, self._cfg.ganancia),
         ):
             if valor is None:
                 continue
-            if not self._captura.set(propiedad, float(valor)):
-                _log.warning(
+            if not captura.set(propiedad, float(valor)):
+                self._avisar(
                     "La camara no acepta fijar %s en %s por software.", nombre, valor
                 )
                 continue
-            leido = self._captura.get(propiedad)
+            leido = captura.get(propiedad)
             # Estas camaras clampean en silencio: piden 192 y se quedan en 64. Decirlo
             # evita media hora de subir el numero esperando que cambie algo.
             if leido >= 0 and abs(leido - float(valor)) > 1.0:
-                _log.info(
+                self._informar(
                     "La camara limito %s a %.0f (se pidio %s): es su maximo.",
                     nombre,
                     leido,
