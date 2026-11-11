@@ -196,3 +196,19 @@ def test_voltear_horizontal_se_aplica(tmp_path) -> None:
 
     assert izquierda_normal > 200, "la franja tenia que estar a la izquierda"
     assert izquierda_volteada < 60, "al voltear, la franja tiene que pasar a la derecha"
+
+
+def test_una_camara_recien_creada_no_se_declara_congelada() -> None:
+    """El flag solo se enciende al caer en el ultimo recurso; por defecto no bloquea nada."""
+    assert Camara(CamaraConfig(fuente="auto")).congelada is False
+
+
+def test_un_video_nunca_queda_marcado_como_congelado(tmp_path) -> None:
+    """Un archivo repite frames sin ser una camara virtual: no puede frenar el archivado."""
+    ruta = _video_de_prueba(tmp_path / "quieto.mp4")
+    camara = Camara(CamaraConfig(fuente=str(ruta)))
+    camara.abrir()
+    try:
+        assert camara.congelada is False
+    finally:
+        camara.cerrar()

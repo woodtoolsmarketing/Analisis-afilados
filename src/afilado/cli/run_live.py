@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import sys
 import time
 from pathlib import Path
@@ -38,7 +39,7 @@ from .. import overlay, revision
 from ..referencias import GaleriaReferencias
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara, enumerar_camaras
-from ..config import AppConfig, cargar_config, ruta_absoluta
+from ..config import AppConfig, cargar_config, raiz_repo, ruta_absoluta
 from ..detector import crear_clasificador
 from ..pipeline import Pipeline
 from ..tipos import ResultadoFrame, Veredicto
@@ -46,6 +47,14 @@ from ..tipos import ResultadoFrame, Veredicto
 # Carpeta donde el modo clasificacion archiva las fotos por clase. Su estructura es
 # exactamente la que consume scripts/construir_clasificacion.py: <dir>/<clase>/*.jpg
 _DIR_COLECCION = "data/coleccion"
+
+# Donde queda el registro de lo que paso. Abierto con doble clic NO hay consola --esa es
+# justamente la idea-- asi que si el log solo fuera a pantalla se perderia entero, y es lo
+# unico con que se diagnostica un problema de camara en el taller. Rota para no crecer sin
+# limite: dos vueltas de 1 MB alcanzan de sobra para ver la sesion de hoy y la anterior.
+_ARCHIVO_REGISTRO = "registro.txt"
+_BYTES_REGISTRO = 1_000_000
+_VUELTAS_REGISTRO = 2
 
 _registro = logging.getLogger(__name__)
 
@@ -348,12 +357,17 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if tecla in teclas_clase:
                 clase = teclas_clase[tecla]
-                try:
-                    ruta = almacen.guardar(limpio, clase)
-                    mensaje = f"GUARDADA como {clase}: {ruta.name}"
-                except (OSError, ValueError) as error:
-                    _registro.error("no se pudo guardar: %s", error)
-                    mensaje = "ERROR AL GUARDAR - revise el disco"
+                motivo = motivo_para_no_archivar(camara, limpio, cfg)
+                if motivo is not None:
+                    _registro.warning("no se archivo la foto: %s", motivo)
+                    mensaje = motivo
+                else:
+                    try:
+                        ruta = almacen.guardar(limpio, clase)
+                        mensaje = f"GUARDADA como {clase}: {ruta.name}"
+                    except (OSError, ValueError) as error:
+                        _registro.error("no se pudo guardar: %s", error)
+                        mensaje = "ERROR AL GUARDAR - revise el disco"
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             elif tecla == ord("p"):
                 en_pausa = not en_pausa
@@ -692,13 +706,18 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             elif accion in cfg.clases:
                 base = congelado if estado.congelado and congelado is not None else vivo
-                try:
-                    ruta = almacen.guardar(base, accion)
-                    estado.capturas = almacen.total_guardados
-                    estado.mensaje = f"GUARDADA como {accion}: {ruta.name}"
-                except (OSError, ValueError) as error:
-                    _registro.error("no se pudo guardar: %s", error)
-                    estado.mensaje = "ERROR AL GUARDAR - revise el disco"
+                motivo = motivo_para_no_archivar(camara, base, cfg)
+                if motivo is not None:
+                    _registro.warning("no se archivo la foto: %s", motivo)
+                    estado.mensaje = motivo
+                else:
+                    try:
+                        ruta = almacen.guardar(base, accion)
+                        estado.capturas = almacen.total_guardados
+                        estado.mensaje = f"GUARDADA como {accion}: {ruta.name}"
+                    except (OSError, ValueError) as error:
+                        _registro.error("no se pudo guardar: %s", error)
+                        estado.mensaje = "ERROR AL GUARDAR - revise el disco"
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
     except KeyboardInterrupt:
         _registro.info("interrumpido por el operario")
@@ -711,11 +730,77 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     return codigo_salida
 
 
+def motivo_para_no_archivar(camara, frame, cfg: AppConfig) -> Optional[str]:
+    """Por que esta foto NO deberia entrar al dataset. None si puede entrar.
+
+    Una foto mal etiquetada no se nota. Entra al dataset, se entrena con ella y el modelo
+    sale raro, sin que nadie pueda decir por que. Frenarla al guardar es mucho mas barato
+    que descubrirla meses despues entre cientos.
+
+    Los dos casos que ya pasaron de verdad en este proyecto:
+
+    1. CAMARA CONGELADA. Con el microscopio desenchufado el programa cae en DroidCam, que
+       muestra un cartel fijo. Alguien archivo ese cartel como sierra APROBADA. Ojo: eso NO
+       lo atrapa un control de foco --el cartel es texto blanco nitido sobre negro y mide
+       nitidez 642, la mas alta de todo el dataset-- asi que hace falta preguntarle a la
+       camara, no a la imagen.
+
+    2. IMAGEN MOVIDA. El mismo diente enfocado mide 101 y con un desenfoque de 5x5 cae a
+       3.7. Una foto asi queda etiquetada buena o mala sin que se vea nada.
+    """
+    if getattr(camara, "congelada", False):
+        return "CAMARA CONGELADA - conecte el microscopio"
+    medida = revision.nitidez(frame)
+    if medida < float(cfg.interfaz.nitidez_minima):
+        return f"IMAGEN MOVIDA (nitidez {medida:.0f}) - enfoque y repita"
+    return None
+
+
+def configurar_registro() -> Optional[Path]:
+    """Manda el log a un archivo al lado del programa, y a la consola si es que hay.
+
+    Abierto con doble clic no hay consola ninguna: sys.stderr es None y un StreamHandler
+    revienta al primer mensaje. Pero el log es lo UNICO que queda cuando la camara falla en
+    el taller --asi se diagnosticaron todos los problemas hasta ahora-- asi que no puede
+    depender de que alguien lo haya arrancado desde una terminal.
+
+    Devuelve la ruta del archivo, o None si no se pudo escribir (disco lleno, carpeta de
+    solo lectura). Que falle no frena el programa: se sigue sin registro.
+    """
+    formato = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+    raiz = logging.getLogger()
+    raiz.setLevel(logging.INFO)
+
+    archivo: Optional[Path] = None
+    try:
+        archivo = raiz_repo() / _ARCHIVO_REGISTRO
+        a_disco = logging.handlers.RotatingFileHandler(
+            archivo,
+            maxBytes=_BYTES_REGISTRO,
+            backupCount=_VUELTAS_REGISTRO,
+            encoding="utf-8",
+        )
+        a_disco.setFormatter(formato)
+        raiz.addHandler(a_disco)
+    except OSError:
+        archivo = None
+
+    # Solo si hay consola de verdad. Con --windowed, PyInstaller deja stderr en None.
+    if sys.stderr is not None:
+        a_pantalla = logging.StreamHandler()
+        a_pantalla.setFormatter(formato)
+        raiz.addHandler(a_pantalla)
+
+    return archivo
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Punto de entrada del bucle en vivo. Devuelve 0 en exito."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s"
-    )
+    archivo_registro = configurar_registro()
+    if archivo_registro is not None:
+        _registro.info("registro de esta sesion: %s", archivo_registro)
     args = _construir_parser().parse_args(argv)
 
     if args.listar_camaras:

@@ -64,6 +64,10 @@ _EXCLUIR = (
 # El modelo del taller es el .onnx, no el .pt: alla no hay torch para leer un checkpoint.
 _PESOS_TALLER = "models/afilado_best.onnx"
 
+# El icono del ejecutable y del acceso directo. Si falta, PyInstaller pone el suyo y el
+# acceso queda con el logo de Python, que no le dice nada a nadie en un taller.
+_ICONO = "assets/afilado.ico"
+
 
 def _construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -87,6 +91,17 @@ def _construir_parser() -> argparse.ArgumentParser:
         help=(
             "Ruta a un .onnx para meter DENTRO del .exe. Por defecto no se incluye ninguno: "
             "el modelo se copia despues a models/ al lado del ejecutable."
+        ),
+    )
+    parser.add_argument(
+        "--con-consola",
+        action="store_true",
+        dest="con_consola",
+        help=(
+            "Arma el .exe CON la ventana negra de consola. Por defecto va sin ella: el "
+            "taller lo abre con doble clic y una consola al lado no le sirve a nadie (y si "
+            "alguien la cierra, se lleva el programa puesto). El registro queda igual en "
+            "registro.txt al lado del .exe. Usa esto solo para depurar."
         ),
     )
     parser.add_argument(
@@ -147,7 +162,7 @@ def _comando(args: argparse.Namespace, temporal: Path, modelo: Optional[Path]) -
         "--noconfirm",
         "--clean",
         "--onedir" if args.carpeta else "--onefile",
-        "--console",
+        "--console" if args.con_consola else "--windowed",
         "--name",
         args.nombre,
         "--paths",
@@ -161,6 +176,11 @@ def _comando(args: argparse.Namespace, temporal: Path, modelo: Optional[Path]) -
         "--add-data",
         f"{temporal / 'configs' / 'config.yaml'}{separador}configs",
     ]
+    icono = RAIZ / _ICONO
+    if icono.is_file():
+        comando += ["--icon", str(icono)]
+    else:
+        print(f"AVISO: no se encontro {_ICONO}; el .exe va a salir con el icono por defecto.")
     if modelo is not None:
         comando += ["--add-data", f"{modelo}{separador}models"]
     for paquete in _EXCLUIR:
@@ -224,11 +244,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("En la PC del taller:")
     print("  1. Copiar el .exe a una carpeta con permiso de escritura (el Escritorio sirve).")
     print("     NO dejarlo en Archivos de programa: ahi no va a poder guardar las fotos.")
-    print("  2. Doble clic. Sin modelo arranca en modo recoleccion: 'a' archiva APROBADA,")
+    print("  2. Crear el acceso directo en el Escritorio:")
+    print("       powershell -ExecutionPolicy Bypass -File scripts\\crear_acceso.ps1")
+    print("     El acceso es comodidad: al .exe tambien se le puede dar doble clic.")
+    print("  3. Sin modelo arranca en modo recoleccion: 'a' archiva APROBADA,")
     print("     'r' archiva RECHAZADA, 'q' sale.")
-    print("  3. Las fotos quedan en  data\\coleccion\\  al lado del .exe.")
-    print("  4. Cuando haya modelo, copiar afilado_best.onnx y afilado_best.onnx.json a")
+    print("  4. Las fotos quedan en  data\\coleccion\\  al lado del .exe.")
+    print("  5. Cuando haya modelo, copiar afilado_best.onnx y afilado_best.onnx.json a")
     print("     una carpeta  models\\  al lado del .exe. El programa los toma solo.")
+    print()
+    print("SI ALGO FALLA: el .exe va SIN consola, asi que lo que paso no se ve en")
+    print("  pantalla: queda en  registro.txt  al lado del ejecutable. Eso es lo que")
+    print("  hay que mirar, y lo que hay que mandar para que se pueda arreglar.")
     return 0
 
 

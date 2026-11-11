@@ -259,6 +259,10 @@ class Camara:
         self._silencioso = False
         self._avisos_guardados: list[tuple[str, tuple]] = []
         self._informes_guardados: list[tuple[str, tuple]] = []
+        # True si hubo que caer en una camara que entrega SIEMPRE la misma imagen. Se abre
+        # igual --es mejor que nada y deja ver que el programa arranco-- pero lo que entrega
+        # no es una sierra, y quien archive fotos tiene que enterarse.
+        self._congelada = False
 
     def _configurar(self, captura: cv2.VideoCapture, silencioso: bool = False) -> None:
         """Aplica formato, enfoque, exposicion, brillo y ganancia a una captura recien
@@ -447,6 +451,7 @@ class Camara:
                     exito, frame = captura.read()
                     if exito and frame is not None:
                         self._fuente, self._backend = indice, backend
+                        self._congelada = True
                         return captura
             captura.release()
         return None
@@ -623,6 +628,17 @@ class Camara:
     @property
     def abierta(self) -> bool:
         return self._captura is not None and self._captura.isOpened()
+
+    @property
+    def congelada(self) -> bool:
+        """True si la camara abierta entrega siempre la misma imagen (camara virtual).
+
+        Paso de verdad: con el microscopio desenchufado, el programa cayo en DroidCam, que
+        muestra un cartel fijo que dice 'Start DroidCam'. Alguien archivo ese cartel como
+        sierra APROBADA y quedo en el dataset. Un modelo entrenado con eso aprende que una
+        pantalla negra con letras es una sierra bien afilada.
+        """
+        return self._congelada
 
     @property
     def descripcion(self) -> str:

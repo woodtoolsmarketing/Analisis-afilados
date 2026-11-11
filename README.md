@@ -126,15 +126,40 @@ Deja `dist\AnalisisAfilado.exe`, de unos **84 MB**. Adentro viajan el interprete
 OpenCV, onnxruntime y el config; **no** viaja el modelo.
 
 En el taller: copiar el .exe a una carpeta **con permiso de escritura** (el Escritorio
-sirve; `Archivos de programa` **no**, porque ahi no va a poder guardar las fotos) y doble
-clic. Arranca en ~2 segundos.
+sirve; `Archivos de programa` **no**, porque ahi no va a poder guardar las fotos) y crear
+el acceso directo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\crear_acceso.ps1
+```
+
+Deja un **"Analisis de afilado"** en el Escritorio, con el icono del programa, apuntando al
+.exe y con la carpeta de trabajo fijada a la del ejecutable. Doble clic y arranca en ~2
+segundos. (Al .exe tambien se le puede dar doble clic directamente; el acceso es comodidad.)
+
+**El .exe se arma SIN consola** (`--windowed`). Una ventana negra al lado de la ventana del
+programa no le dice nada a nadie, y si alguien la cierra se lleva el programa puesto. Pero
+eso tiene una consecuencia: sin consola, `sys.stdout` y `sys.stderr` son `None`, y todo lo
+que el programa informa se perderia. Por eso **el registro va a un archivo**:
+
+```
+registro.txt                   <- lo que paso en esta sesion y en la anterior
+```
+
+Ese archivo es lo unico que queda cuando algo falla en el taller: **todos** los problemas de
+camara que se arreglaron en este proyecto se diagnosticaron leyendolo. Rota solo, a 1 MB por
+vuelta, asi que no crece sin limite. Si el programa no arranca, en vez de un parpadeo negro
+aparece un cartel de Windows con la causa --sacada del propio registro-- y la ruta del
+archivo. Para depurar con consola de verdad: `python scripts/construir_exe.py --con-consola`.
 
 Lo que el programa escribe y lee queda **al lado del .exe**, no adentro:
 
 ```
 AnalisisAfilado.exe
+registro.txt                   <- el log de la sesion (mirá esto si algo falla)
 data\coleccion\aprobada\      <- las fotos que archiva el operario
 data\coleccion\rechazada\
+data\referencia\microscopio\   <- las fotos de modelo contra las que se compara
 models\afilado_best.onnx       <- el modelo, cuando llegue
 models\afilado_best.onnx.json
 configs\config.yaml            <- opcional: si existe, pisa al que viaja adentro
@@ -148,6 +173,21 @@ configs\config.yaml            <- opcional: si existe, pisa al que viaja adentro
 
 Sin modelo en `models\`, el .exe arranca igual en **modo recoleccion**: no da veredicto,
 pero deja archivar fotos con `a` y `r`. Es exactamente lo que hace falta al principio.
+
+#### Que fotos NO deja archivar
+
+Una foto mal etiquetada no se nota: entra al dataset, se entrena con ella, y el modelo sale
+raro sin que nadie pueda decir por que. Asi que `a` y `r` no guardan cualquier cosa. Se
+frena, con el motivo en pantalla, si:
+
+- **La camara esta congelada.** Con el microscopio desenchufado, el programa cae en la
+  camara virtual que haya instalada (DroidCam y similares) y muestra su cartel fijo. Esto ya
+  paso: ese cartel quedo archivado como sierra *aprobada*. Y **no lo atrapa un control de
+  foco**: medido sobre la foto real, el cartel da nitidez **642** --la mas alta de todo el
+  dataset, mas que cualquier diente-- porque es texto blanco nitido sobre negro. Por eso se
+  le pregunta a la camara (`Camara.congelada`), no a la imagen.
+- **La imagen esta movida.** El mismo diente enfocado mide 101 y con un desenfoque de 5x5
+  cae a 3.7. El umbral sale de `interfaz.nitidez_minima` en el config.
 
 ### 3.4 La PC del taller: instalacion liviana (alternativa al .exe)
 
@@ -765,6 +805,7 @@ Analisis-afilado/
 │   ├── setup.ps1             <- instalador
 │   ├── exportar_onnx.py      <- convierte el .pt en .onnx para la PC del taller
 │   ├── construir_exe.py      <- arma AnalisisAfilado.exe para el taller
+│   ├── crear_acceso.ps1     <- deja el acceso directo en el Escritorio
 │   ├── lanzador_taller.py    <- punto de entrada de ese .exe
 │   └── make_aruco.py         <- genera el marcador para imprimir
 ├── src/afilado/              <- el programa (no tocar)
