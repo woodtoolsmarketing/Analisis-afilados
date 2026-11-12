@@ -200,38 +200,33 @@ interfaz:
   # LAS DOS CLASES TIENEN QUE CRECER JUNTAS. Con 80 buenas y 3 malas no se entrena nada
   # util: al modelo le conviene decir "buena" siempre y acierta el 96%.
   fotos_por_clase_objetivo: 50
-  # Umbral del modo COMPARACION DE FOTOS: el que se usa MIENTRAS NO HAY MODELO entrenado,
-  # cuando el veredicto sale de comparar la sierra con la foto de modelo que esta al lado.
+  # A partir de que PARECIDO con la foto de modelo se da por APROBADO, mientras no haya
+  # modelo entrenado. 0.70 = 70%.
   #
-  # Va aparte de umbral_aprobacion a proposito: son dos escalas distintas.
-  # umbral_aprobacion mide una PROBABILIDAD del modelo; este mide PARECIDO entre dos fotos.
-  # Medido sobre las 13 fotos de modelo del taller:
+  # Va aparte de umbral_aprobacion porque son dos escalas distintas: aquel mide una
+  # PROBABILIDAD del modelo, este mide PARECIDO entre dos fotos.
+  umbral_parecido: 0.70
+  # Si el parecido entre fotos alcanza para dar APROBADO/DESAPROBADO.
   #
-  #     el mismo diente con otra exposicion      100%
-  #     el mismo diente en otra toma             ~95%
-  #     dos dientes DISTINTOS                   60-71%
-  #     mediana de todos los pares                63%
+  # ENCENDIDO POR PEDIDO DEL TALLER. Queda escrito lo que esta medido sobre las fotos del
+  # 12/11, para que nadie lea este porcentaje como mas de lo que es:
   #
-  # Con 0.70 --el valor de la otra escala-- dos piezas distintas daban APROBADO.
+  #     exactamente la misma toma                100%
+  #     dos tomas de la MISMA pieza               78%
+  #     dos tomas de piezas DISTINTAS             79%
+  #     mediana de los 78 pares de fotos modelo   63%
   #
-  # OJO CON QUE MIDE: parecido visual con UNA foto, no estado del filo. Mientras no haya
-  # fotos de dientes gastados de verdad, este numero no distingue un filo sano de uno
-  # redondeado. Para eso hace falta entrenar.
-  umbral_parecido: 0.85
-  # Si el parecido entre fotos puede dar APROBADO/DESAPROBADO por si solo.
+  # El parecido NO separa una pieza de otra: 78 contra 79. Lo unico que distingue con
+  # confianza es "es exactamente la misma toma". Con el umbral en 70%, el 28% de los
+  # pares de fotos de modelo se aprueban entre si.
   #
-  # VIENE APAGADO, y no por prudencia generica: esta medido que no alcanza. Sobre las fotos
-  # del taller, dos tomas de la MISMA pieza dan 78% y dos de piezas DISTINTAS dan 79%. El
-  # numero no las separa. Lo unico que el parecido distingue con confianza es "es
-  # exactamente la misma toma" (100%).
+  # O sea: este APROBADO dice "se parece bastante a la foto de al lado", NO dice "el filo
+  # esta sano". Son cosas distintas y conviene no confundirlas al mirar la pantalla. El
+  # veredicto de afilado de verdad llega cuando haya modelo entrenado con fotos de
+  # dientes gastados y dientes sanos.
   #
-  # Apagado, la pantalla muestra PARECIDO xx% en ambar: informacion honesta, util para
-  # probar y para ver si la pieza esta bien puesta. Encendido, pinta verde o rojo usando
-  # umbral_parecido, que es lo mismo que paso con el DESAPROBADO 36%: un numero con cara
-  # de veredicto que no mide lo que el operario cree.
-  #
-  # El veredicto de verdad llega con el modelo entrenado.
-  veredicto_por_parecido: false
+  # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
+  veredicto_por_parecido: true
 
 detector:
   # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:

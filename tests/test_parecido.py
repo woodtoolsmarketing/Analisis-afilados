@@ -104,43 +104,52 @@ def test_el_resultado_siempre_queda_entre_0_y_1() -> None:
 # --------------------------------------------------------------------- en pantalla
 
 
-def test_sin_modelo_se_muestra_el_parecido_pero_no_como_veredicto(cfg: AppConfig) -> None:
-    """La decision de diseno central de este modo.
+def test_sin_modelo_el_parecido_aprueba_pasando_el_umbral(cfg: AppConfig) -> None:
+    """El taller lo pidio asi: APROBADO cuando el parecido pasa el 70%.
 
-    Esta MEDIDO que el parecido no alcanza para juzgar: sobre las fotos del taller, dos
-    tomas de la misma pieza dan 78% y dos de piezas distintas 79%. Lo unico que distingue
-    con confianza es "es exactamente la misma toma" (100%). Pintarlo de verde o rojo seria
-    repetir el DESAPROBADO 36%: un numero con cara de veredicto que no mide lo que el
-    operario cree que mide.
+    Lo que el numero significa esta medido y anotado en el config: dos tomas de la MISMA
+    pieza dan 78% y dos de piezas DISTINTAS dan 79%, asi que este APROBADO dice "se parece
+    bastante a la foto de al lado", no "el filo esta sano". Son cosas distintas.
     """
-    estado = revision.EstadoRevision(congelado=True, veredicto=None, parecido=0.94)
+    cfg.interfaz.umbral_parecido = 0.70
+    estado = revision.EstadoRevision(congelado=True, veredicto=None, parecido=0.79)
 
     titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
 
-    assert "94%" in titulo, "el numero se muestra, bien grande"
-    assert aprobado is None, "pero no es un aprobado ni un desaprobado"
-    assert color == revision._AMBAR
-    assert "no es un veredicto" in detalle
+    assert (titulo, aprobado) == ("APROBADO", True)
+    assert color == revision._VERDE_OK
+    assert "79%" in detalle
 
 
-def test_un_parecido_bajo_tampoco_desaprueba(cfg: AppConfig) -> None:
+def test_por_debajo_del_umbral_desaprueba(cfg: AppConfig) -> None:
+    cfg.interfaz.umbral_parecido = 0.70
     estado = revision.EstadoRevision(congelado=True, veredicto=None, parecido=0.42)
 
-    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
 
-    assert "42%" in titulo and aprobado is None
+    assert (titulo, aprobado) == ("DESAPROBADO", False)
+    assert color == revision._ROJO_NO
+    assert "42%" in detalle
 
 
-def test_se_puede_encender_el_veredicto_por_parecido(cfg: AppConfig) -> None:
-    """Para quien quiera probarlo igual: una llave en el config, no el comportamiento base."""
-    cfg.interfaz.veredicto_por_parecido = True
-    cfg.interfaz.umbral_parecido = 0.85
+def test_justo_en_el_umbral_aprueba(cfg: AppConfig) -> None:
+    """70% pedido es 70% incluido; si no, el borde es una loteria."""
+    cfg.interfaz.umbral_parecido = 0.70
+    estado = revision.EstadoRevision(congelado=True, parecido=0.70)
 
-    alto = revision.EstadoRevision(congelado=True, parecido=0.94)
-    bajo = revision.EstadoRevision(congelado=True, parecido=0.42)
+    assert revision.estado_resultado(estado, cfg)[3] is True
 
-    assert revision.estado_resultado(alto, cfg)[3] is True
-    assert revision.estado_resultado(bajo, cfg)[3] is False
+
+def test_se_puede_apagar_el_veredicto_por_parecido(cfg: AppConfig) -> None:
+    """Sigue existiendo el modo que solo informa, sin juzgar."""
+    cfg.interfaz.veredicto_por_parecido = False
+    estado = revision.EstadoRevision(congelado=True, parecido=0.94)
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert "94%" in titulo and aprobado is None
+    assert color == revision._AMBAR
+    assert "no es un veredicto" in detalle
 
 
 def test_la_pantalla_SIEMPRE_dice_de_donde_salio_el_numero(cfg: AppConfig) -> None:
@@ -201,7 +210,6 @@ def test_la_comparacion_de_fotos_usa_SU_umbral(cfg: AppConfig) -> None:
     """
     cfg.interfaz.umbral_aprobacion = 0.70
     cfg.interfaz.umbral_parecido = 0.85
-    cfg.interfaz.veredicto_por_parecido = True
     estado = revision.EstadoRevision(congelado=True, parecido=0.71)
 
     titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)

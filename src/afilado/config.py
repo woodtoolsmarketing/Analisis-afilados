@@ -123,18 +123,23 @@ class InterfazConfig:
     # exposicion da 100% y con otra toma ~95%, y dos dientes distintos rondan 60-71%.
     #
     # Con 0.70 --el valor de la otra escala-- dos piezas DISTINTAS daban APROBADO.
-    umbral_parecido: float = 0.85
+    umbral_parecido: float = 0.70
     # Si el PARECIDO entre fotos puede dar APROBADO/DESAPROBADO por si solo.
     #
-    # Viene apagado, y no por prudencia generica: esta medido que no alcanza. Sobre las
-    # fotos del taller, dos tomas de la misma pieza dan 78% y dos de piezas distintas 79%.
-    # Lo unico que el parecido distingue con confianza es "es exactamente la misma toma"
-    # (100%). Pintar verde o rojo con eso seria repetir el error que ya costo caro: un
-    # numero con cara de veredicto que no mide lo que el operario cree.
+    # ENCENDIDO POR PEDIDO EXPLICITO: el taller quiere ver APROBADO cuando el parecido
+    # pasa el 70%, y esa es la decision.
     #
-    # Apagado muestra PARECIDO xx% en ambar, que es informacion honesta y sirve para
-    # probar. Encendido pinta verde/rojo usando umbral_parecido.
-    veredicto_por_parecido: bool = False
+    # Queda escrito lo que esta medido, para que nadie lo lea despues como un dato duro.
+    # Sobre las fotos del taller del 12/11, dos tomas de la MISMA pieza dan 78% y dos de
+    # piezas DISTINTAS dan 79%: el parecido no las separa. Lo unico que distingue con
+    # confianza es "es exactamente la misma toma" (100%). Con el umbral en 0.70, el 28%
+    # de los pares de fotos de modelo se aprueban entre si.
+    #
+    # O sea: este APROBADO dice "se parece bastante a la foto de al lado", no "el filo
+    # esta sano". El veredicto de afilado llega con el modelo entrenado.
+    #
+    # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
+    veredicto_por_parecido: bool = True
 
 
 @dataclass
