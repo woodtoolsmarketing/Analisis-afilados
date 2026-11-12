@@ -357,7 +357,7 @@ def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if tecla in teclas_clase:
                 clase = teclas_clase[tecla]
-                motivo = motivo_para_no_archivar(camara, limpio, cfg)
+                motivo = motivo_para_no_archivar(camara, limpio, cfg, almacen)
                 if motivo is not None:
                     _registro.warning("no se archivo la foto: %s", motivo)
                     mensaje = motivo
@@ -631,6 +631,13 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
 
             a_mostrar = congelado if estado.congelado and congelado is not None else vivo
             referencia = galeria.imagen_actual()
+            # Parecido foto contra foto. Es el veredicto de respaldo mientras no haya
+            # modelo entrenado; con modelo manda el modelo y esto ni se calcula. Cuesta
+            # ~3 ms y el frame dura ~59 ms, pero igual se respeta cada_n_frames: no hay
+            # razon para gastarlo en cada cuadro.
+            if clasificador is None and not estado.esperando_foco:
+                if estado.congelado or frames_vistos % cada_n_frames == 0:
+                    estado.parecido = revision.parecido(a_mostrar, referencia)
             estado.referencia_faltante = referencia is None
             estado.nombre_referencia = galeria.nombre_actual
             estado.posicion_referencia = galeria.posicion
@@ -709,7 +716,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             elif accion in cfg.clases:
                 base = congelado if estado.congelado and congelado is not None else vivo
-                motivo = motivo_para_no_archivar(camara, base, cfg)
+                motivo = motivo_para_no_archivar(camara, base, cfg, almacen)
                 if motivo is not None:
                     _registro.warning("no se archivo la foto: %s", motivo)
                     estado.mensaje = motivo
@@ -734,7 +741,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     return codigo_salida
 
 
-def motivo_para_no_archivar(camara, frame, cfg: AppConfig) -> Optional[str]:
+def motivo_para_no_archivar(camara, frame, cfg: AppConfig, almacen=None) -> Optional[str]:
     """Por que esta foto NO deberia entrar al dataset. None si puede entrar.
 
     Una foto mal etiquetada no se nota. Entra al dataset, se entrena con ella y el modelo
@@ -751,12 +758,20 @@ def motivo_para_no_archivar(camara, frame, cfg: AppConfig) -> Optional[str]:
 
     2. IMAGEN MOVIDA. El mismo diente enfocado mide 101 y con un desenfoque de 5x5 cae a
        3.7. Una foto asi queda etiquetada buena o mala sin que se vea nada.
+
+    3. LA MISMA FOTO OTRA VEZ. Con la imagen congelada, cada pulsacion de GUARDAR escribia
+       de nuevo el MISMO frame. Quedaron 50 archivos por clase que en realidad eran 2 fotos,
+       y una estaba archivada como buena Y como mala, byte por byte el mismo archivo.
     """
     if getattr(camara, "congelada", False):
         return "CAMARA CONGELADA - conecte el microscopio"
     medida = revision.nitidez(frame)
     if medida < float(cfg.interfaz.nitidez_minima):
         return f"IMAGEN MOVIDA (nitidez {medida:.0f}) - enfoque y repita"
+    if almacen is not None:
+        anterior = almacen.ya_guardada(frame)
+        if anterior is not None:
+            return f"ESTA FOTO YA LA GUARDASTE como {anterior} - mueva la pieza"
     return None
 
 

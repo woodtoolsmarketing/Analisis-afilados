@@ -159,3 +159,114 @@ def test_no_cuenta_archivos_que_no_son_fotos(tmp_path) -> None:
     almacen = AlmacenClasificacion(str(tmp_path), ["aprobada"])
 
     assert almacen.conteo_por_clase() == {"aprobada": 1}
+
+
+# ---------------------------------------------------------------------------
+# NO GUARDAR DOS VECES LA MISMA FOTO. Lo que arruino el dataset del taller:
+# con la imagen congelada, cada pulsacion de GUARDAR escribia otra vez el MISMO
+# frame. Quedaron 50 archivos por clase que eran 2 fotos, y una de ellas estaba
+# archivada como buena Y como mala, byte por byte el mismo archivo.
+# ---------------------------------------------------------------------------
+
+
+def _almacen(tmp_path):
+    from afilado.almacen import AlmacenClasificacion
+
+    return AlmacenClasificacion(str(tmp_path), ["aprobada", "rechazada"])
+
+
+def _foto(semilla: int = 1) -> np.ndarray:
+    rng = np.random.default_rng(semilla)
+    return rng.integers(0, 255, (120, 160, 3), dtype=np.uint8)
+
+
+def test_la_misma_foto_no_entra_dos_veces(tmp_path) -> None:
+    almacen = _almacen(tmp_path)
+    foto = _foto()
+    almacen.guardar(foto, "aprobada")
+
+    assert almacen.ya_guardada(foto) == "aprobada"
+
+
+def test_la_misma_foto_no_puede_ser_buena_Y_mala(tmp_path) -> None:
+    """El caso exacto que aparecio en el dataset: un archivo identico en las dos clases."""
+    almacen = _almacen(tmp_path)
+    foto = _foto()
+    almacen.guardar(foto, "aprobada")
+
+    assert almacen.ya_guardada(foto) == "aprobada", "al ir a guardarla como mala, tiene que frenar"
+
+
+def test_una_foto_nueva_entra_sin_problema(tmp_path) -> None:
+    almacen = _almacen(tmp_path)
+    almacen.guardar(_foto(1), "aprobada")
+
+    assert almacen.ya_guardada(_foto(999)) is None
+
+
+def _diente(semilla: int = 0, lado: int = 240) -> np.ndarray:
+    """Una imagen CON ESTRUCTURA, parecida a lo que entrega el microscopio.
+
+    El ruido aleatorio no sirve para probar esto: al achicarlo a 32x32 queda gris
+    uniforme, y como la huella divide por el desvio, amplifica el residuo y cualquier
+    cambio minimo se ve enorme. Medido, el mismo ruido apenas aclarado daba 0.08, contra
+    0.0063 de dos fotos reales del taller con distinta exposicion.
+    """
+    img = np.full((lado, lado, 3), 60, np.uint8)
+    cv2.fillPoly(img, [np.array([[10, lado - 20], [10, 120], [lado - 60, 40],
+                                 [lado - 20, 70], [lado - 20, lado - 20]])], (190, 190, 190))
+    cv2.line(img, (10, 120), (lado - 60, 40), (235, 235, 235), 6)
+    for i in range(0, lado, 7):
+        cv2.line(img, (i, 0), (i + 40 + semilla * 3, lado), (0, 0, 0), 1)
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def test_un_cambio_suave_de_luz_no_la_convierte_en_foto_nueva(tmp_path) -> None:
+    """Medido sobre fotos reales: el mismo frame con otra exposicion daba 0.0063-0.0074.
+
+    Importa porque la lampara del microscopio no es estable. Si cada parpadeo contara como
+    foto nueva, se colarian cincuenta copias igual.
+    """
+    almacen = _almacen(tmp_path)
+    foto = _diente()
+    almacen.guardar(foto, "aprobada")
+    apenas_mas_oscura = np.clip(foto.astype(np.float32) * 0.9 - 10, 0, 255).astype(np.uint8)
+
+    assert almacen.ya_guardada(apenas_mas_oscura) == "aprobada"
+
+
+def test_mover_la_pieza_SI_cuenta_como_foto_nueva(tmp_path) -> None:
+    """El limite del otro lado: si frenara esto, no se podria juntar el dataset."""
+    almacen = _almacen(tmp_path)
+    foto = _diente()
+    almacen.guardar(foto, "aprobada")
+    M = np.float32([[1, 0, 12], [0, 1, -9]])
+    corrida = cv2.warpAffine(foto, M, foto.shape[1::-1], borderMode=cv2.BORDER_REPLICATE)
+
+    assert almacen.ya_guardada(corrida) is None
+
+
+def test_el_bucle_frena_la_repetida(tmp_path) -> None:
+    from afilado.config import AppConfig as _AppConfig
+
+    c = _AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+    c.interfaz.nitidez_minima = 1.0
+    almacen = _almacen(tmp_path)
+    foto = _foto()
+
+    assert run_live.motivo_para_no_archivar(_CamaraFalsa(), foto, c, almacen) is None
+    almacen.guardar(foto, "aprobada")
+    motivo = run_live.motivo_para_no_archivar(_CamaraFalsa(), foto, c, almacen)
+
+    assert motivo is not None and "YA LA GUARDASTE" in motivo
+    assert "aprobada" in motivo, "tiene que decir en que clase quedo"
+
+
+def test_sin_almacen_el_filtro_sigue_andando(tmp_path) -> None:
+    """La firma vieja no puede romperse: hay otro bucle que llama sin almacen."""
+    from afilado.config import AppConfig as _AppConfig
+
+    c = _AppConfig(clases=["aprobada"], clases_defecto=[])
+    c.interfaz.nitidez_minima = 1.0
+
+    assert run_live.motivo_para_no_archivar(_CamaraFalsa(), _foto(), c) is None

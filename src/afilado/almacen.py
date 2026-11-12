@@ -364,11 +364,26 @@ class AlmacenClasificacion:
     dataset crece sin dibujar cajas. Igual que en el otro almacen, se guarda la imagen LIMPIA.
     """
 
+    # Distancia por debajo de la cual dos fotos se consideran LA MISMA y la segunda no
+    # aporta nada al dataset. Medido sobre las fotos del taller:
+    #
+    #     archivo identico                              0.0000
+    #     mismo frame guardado con otra exposicion      0.0063 - 0.0074
+    #     tomas realmente distintas de la misma pieza   0.0315 - 0.3296
+    #
+    # El corte queda entre medio con margen a los dos lados.
+    _DISTANCIA_DUPLICADO = 0.015
+
     def __init__(self, directorio: str, clases: list[str], calidad_jpg: int = 95) -> None:
         self._base = ruta_absoluta(directorio)
         self._clases = list(clases)
         self._calidad = int(calidad_jpg)
         self._guardados = 0
+        # Huellas de lo guardado EN ESTA SESION, para no archivar la misma foto dos veces.
+        # Solo esta sesion a proposito: el caso que rompe el dataset es apretar GUARDAR
+        # varias veces sobre una imagen congelada, y leer el disco entero en cada guardado
+        # costaria segundos cuando haya miles de fotos.
+        self._huellas: list[tuple[np.ndarray, str]] = []
 
     @property
     def total_guardados(self) -> int:
@@ -394,6 +409,35 @@ class AlmacenClasificacion:
                 conteos[clase] = 0
         return conteos
 
+    @staticmethod
+    def _huella(frame: np.ndarray) -> np.ndarray:
+        """Firma chica de una imagen, sin brillo ni contraste propios."""
+        if frame.ndim == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        g = cv2.resize(frame, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+        return (g - g.mean()) / (g.std() + 1e-6)
+
+    def ya_guardada(self, frame: np.ndarray) -> Optional[str]:
+        """Si esta foto ya se archivo en esta sesion, devuelve en que clase. None si no.
+
+        ESTO PASO DE VERDAD Y ARRUINO EL DATASET. Con la imagen congelada, cada pulsacion
+        de GUARDAR escribia otra vez el MISMO frame: quedaron 50 archivos por clase que
+        eran 2 fotos distintas, y una de ellas estaba archivada como buena Y como mala a la
+        vez, byte por byte el mismo archivo. Un modelo entrenado con eso no puede aprender
+        nada, y encima da 100% de acierto en validacion porque se esta evaluando sobre las
+        mismas imagenes que memorizo.
+        """
+        if frame is None:
+            return None
+        try:
+            huella = self._huella(frame)
+        except cv2.error:
+            return None
+        for previa, clase in self._huellas:
+            if float(np.abs(huella - previa).mean()) < self._DISTANCIA_DUPLICADO:
+                return clase
+        return None
+
     def guardar(self, frame_limpio: np.ndarray, clase: str) -> Path:
         """Escribe el frame en <base>/<clase>/ y devuelve la ruta. No muta el frame de entrada."""
         if clase not in self._clases:
@@ -414,4 +458,8 @@ class AlmacenClasificacion:
         if not cv2.imwrite(str(destino), frame_limpio, [cv2.IMWRITE_JPEG_QUALITY, self._calidad]):
             raise OSError(f"no se pudo escribir {destino}")
         self._guardados += 1
+        try:
+            self._huellas.append((self._huella(frame_limpio), clase))
+        except cv2.error:
+            pass
         return destino

@@ -113,6 +113,28 @@ class InterfazConfig:
     # cuando se entrena y se mira el acierto sobre las fotos de validacion: si queda bajo,
     # hacen falta mas; si queda alto con pocas, alcanzo con menos.
     fotos_por_clase_objetivo: int = 50
+    # Umbral del modo COMPARACION DE FOTOS, el que se usa mientras no hay modelo
+    # entrenado. Va aparte de umbral_aprobacion a proposito: son dos escalas distintas y
+    # compartir el numero da veredictos absurdos.
+    #
+    # umbral_aprobacion mide una PROBABILIDAD del modelo (0 a 1 repartido entre clases).
+    # Este mide PARECIDO entre dos fotos, que sobre las 13 fotos de modelo del taller se
+    # reparte asi: maximo 100%, mediana 63%, minimo 25%; el mismo diente con otra
+    # exposicion da 100% y con otra toma ~95%, y dos dientes distintos rondan 60-71%.
+    #
+    # Con 0.70 --el valor de la otra escala-- dos piezas DISTINTAS daban APROBADO.
+    umbral_parecido: float = 0.85
+    # Si el PARECIDO entre fotos puede dar APROBADO/DESAPROBADO por si solo.
+    #
+    # Viene apagado, y no por prudencia generica: esta medido que no alcanza. Sobre las
+    # fotos del taller, dos tomas de la misma pieza dan 78% y dos de piezas distintas 79%.
+    # Lo unico que el parecido distingue con confianza es "es exactamente la misma toma"
+    # (100%). Pintar verde o rojo con eso seria repetir el error que ya costo caro: un
+    # numero con cara de veredicto que no mide lo que el operario cree.
+    #
+    # Apagado muestra PARECIDO xx% en ambar, que es informacion honesta y sirve para
+    # probar. Encendido pinta verde/rojo usando umbral_parecido.
+    veredicto_por_parecido: bool = False
 
 
 @dataclass

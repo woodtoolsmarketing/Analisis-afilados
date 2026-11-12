@@ -73,6 +73,9 @@ class EstadoRevision:
     # cartel de SIN MODELO es un callejon sin salida: dice que falta el modelo pero no que
     # el operario es justamente quien lo esta construyendo, ni cuanto le falta.
     conteos: Optional[dict] = None
+    # Parecido con la foto de modelo, 0..1, medido foto contra foto. Es el veredicto de
+    # respaldo mientras no haya modelo entrenado. Ver revision.parecido().
+    parecido: Optional[float] = None
 
 
 @dataclass
@@ -338,6 +341,65 @@ def componer(
 
 
 
+_LADO_PARECIDO = 256
+_MARGEN_PARECIDO = 5  # 1/5 de recorte por lado al armar la plantilla
+
+
+def _para_comparar(imagen: np.ndarray) -> np.ndarray:
+    """Lleva una foto a gris, a un tamano fijo y SIN brillo ni contraste propios.
+
+    La normalizacion es lo que hace viable comparar fotos del microscopio. Medido sobre
+    tres fotos del mismo diente guardadas con exposiciones distintas --01-LU3F-0300,
+    02-R01 y 03-FREUD-250, que difieren en el 100% de los pixeles, con una diferencia
+    media de 19 a 39 niveles-- el parecido da 1.000: la luz desaparece por completo.
+    Sin normalizar, esa misma terna se veria como tres piezas diferentes.
+    """
+    if imagen.ndim == 3:
+        imagen = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+    chica = cv2.resize(
+        imagen, (_LADO_PARECIDO, _LADO_PARECIDO), interpolation=cv2.INTER_AREA
+    ).astype(np.float32)
+    return (chica - chica.mean()) / (chica.std() + 1e-6)
+
+
+def parecido(imagen: Optional[np.ndarray], referencia: Optional[np.ndarray]) -> Optional[float]:
+    """Cuanto se parece la foto de la pieza a la foto de modelo, entre 0 y 1.
+
+    ESTO SI ES una comparacion foto contra foto, y es lo que el operario siempre creyo que
+    mostraba la pantalla. Sirve cuando todavia no hay modelo entrenado: el numero sale de
+    las dos imagenes que estan a la vista, no de un modelo que puede estar mirando otra
+    cosa.
+
+    COMO ESTA HECHA, Y POR QUE ASI:
+
+      - En GRIS y normalizada, para que no la gobierne la luz del microscopio, que cambia
+        entre foto y foto (ver _para_comparar).
+      - Con matchTemplate en vez de restar pixel a pixel, porque la pieza se apoya a mano y
+        nunca cae en el mismo lugar. Se recorta el centro del modelo y se lo busca sobre la
+        pieza, quedandose con el mejor calce. Sin esto, correr la pieza unos milimetros
+        derrumba el numero aunque sea el mismo diente.
+
+    LO QUE ESTE NUMERO NO ES: un veredicto de afilado. Mide parecido visual con UNA foto.
+    Medido sobre las fotos del taller del 12/11, la pieza marcada como buena y la marcada
+    como mala dieron las dos 94.8% --porque resultaron ser el mismo archivo-- asi que
+    mientras no haya fotos de dientes gastados de verdad, este numero no puede distinguir
+    un filo sano de uno redondeado. Para eso hace falta el modelo entrenado.
+    """
+    if imagen is None or referencia is None:
+        return None
+    try:
+        a = _para_comparar(imagen)
+        b = _para_comparar(referencia)
+    except cv2.error:
+        return None
+    m = _LADO_PARECIDO // _MARGEN_PARECIDO
+    plantilla = b[m:-m, m:-m]
+    if plantilla.size == 0:
+        return None
+    mejor = float(cv2.matchTemplate(a, plantilla, cv2.TM_CCOEFF_NORMED).max())
+    return float(max(0.0, min(1.0, mejor)))
+
+
 def coincidencia(veredicto: Optional[Veredicto], cfg: AppConfig) -> Optional[float]:
     """Cuanto se parece la pieza a una APROBADA, entre 0 y 1. None si no hay veredicto.
 
@@ -582,13 +644,36 @@ def estado_resultado(
         return "ENFOCANDO", detalle, _AMBAR, None
     if not estado.congelado and estado.veredicto is None and estado.nitidez is None:
         return "ESPERANDO", "apriete REVISAR", _SUPERFICIE, None
+    # De donde sale el numero se DICE en pantalla, siempre. Mostrar un porcentaje sin
+    # decir que lo produjo fue el error que hizo aparecer un DESAPROBADO 36% con las dos
+    # imagenes practicamente iguales: el numero venia de un modelo entrenado con otra cosa
+    # y nadie podia saberlo mirando la pantalla.
     valor = coincidencia(estado.veredicto, cfg)
+    origen = "segun el modelo entrenado"
+    umbral = float(cfg.interfaz.umbral_aprobacion)
+    if valor is None and estado.parecido is not None:
+        if not getattr(cfg.interfaz, "veredicto_por_parecido", False):
+            # Se MUESTRA el parecido, pero no se lo disfraza de veredicto. Medido sobre las
+            # fotos del taller, dos tomas de la misma pieza dan 78% y dos de piezas
+            # distintas 79%: el numero no separa. Lo unico que distingue con confianza es
+            # "es exactamente la misma toma" (100%). Pintar verde o rojo con esto seria el
+            # mismo error que el DESAPROBADO 36%.
+            return (
+                f"PARECIDO {estado.parecido * 100:.0f}%",
+                "con la foto de modelo - todavia no es un veredicto de afilado",
+                _AMBAR,
+                None,
+            )
+        valor, origen = estado.parecido, "comparando con la foto de modelo"
+        # Otra escala, otro umbral. Con el del modelo (0.70), dos piezas DISTINTAS daban
+        # APROBADO: medido, dos dientes diferentes de este microscopio rondan 60-71%.
+        umbral = float(getattr(cfg.interfaz, "umbral_parecido", umbral))
     if valor is None:
         return "SIN MODELO", _progreso_del_dataset(estado, cfg), _AMBAR, None
-    umbral = float(cfg.interfaz.umbral_aprobacion)
+    detalle = f"{valor * 100:.0f}% - {origen}"
     if valor >= umbral:
-        return "APROBADO", f"coincidencia {valor * 100:.0f}%", _VERDE_OK, True
-    return "DESAPROBADO", f"coincidencia {valor * 100:.0f}%", _ROJO_NO, False
+        return "APROBADO", detalle, _VERDE_OK, True
+    return "DESAPROBADO", detalle, _ROJO_NO, False
 
 
 def _progreso_del_dataset(estado: EstadoRevision, cfg) -> str:
