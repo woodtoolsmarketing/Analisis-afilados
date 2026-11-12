@@ -324,7 +324,7 @@ def _destinos_rapidos(cfg: AppConfig) -> list[tuple[str, str, bool]]:
 
 
 def _analizar_dientes(
-    frame, memoria, cfg: AppConfig, referencia, ejemplos: dict,
+    frame, memoria, cfg: AppConfig, referencia, ejemplos: dict, referencia_entera=None,
 ) -> list[revision.DienteEnPantalla]:
     """Separa los dientes de la imagen y juzga CADA UNO por su cuenta.
 
@@ -336,6 +336,13 @@ def _analizar_dientes(
     encontrados = dientes.detectar(frame, maximo=_MAX_DIENTES)
     if not encontrados:
         return []
+    # CON UN SOLO DIENTE A LA VISTA, LA PIEZA ES LA FOTO. Ahi se compara cuadro contra
+    # cuadro, que es lo que el taller viene mirando y sobre lo que esta puesto el umbral
+    # del 70%. Con VARIOS no hay un numero unico posible, asi que cada uno se compara
+    # recortado contra el diente de la foto de modelo. Son dos escalas distintas --medido,
+    # el mismo par da 42% cuadro contra cuadro y 45% recorte contra recorte-- pero nunca
+    # se muestran juntas: con varios dientes el cartel pasa a ser el resumen.
+    uno_solo = len(encontrados) == 1
 
     listos = memoria is not None and memoria.lista_para_juzgar(
         cfg.memoria.minimo_por_concepto
@@ -358,7 +365,14 @@ def _analizar_dientes(
                 aprobado = concepto not in cfg.clases_defecto
                 ejemplo = _foto_de_ejemplo(juicio, ejemplos)
         else:
-            parecido = revision.parecido(recorte, referencia)
+            # CONTRA EL DIENTE DE LA FOTO DE MODELO, no contra la foto entera. Comparar un
+            # recorte de diente contra un cuadro completo es comparar dos cosas distintas:
+            # medido sobre las fotos del taller, el mismo par daba 42% mirando cuadro
+            # contra cuadro, 45% recorte contra recorte y 25% recorte contra cuadro. Ese
+            # 25% es el que aparecia en rojo sobre el diente mientras el cartel decia
+            # APROBADO en verde, con los dos numeros sacados de la misma pieza.
+            contra = referencia_entera if uno_solo and referencia_entera is not None else referencia
+            parecido = revision.parecido(frame if uno_solo else recorte, contra)
             if parecido is not None and getattr(cfg.interfaz, "veredicto_por_parecido", False):
                 aprobado = parecido >= float(cfg.interfaz.umbral_parecido)
         en_pantalla.append(
@@ -1213,6 +1227,26 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 )
         return mensaje
 
+    recortes_modelo: dict = {}
+
+    def recorte_modelo(referencia):
+        """El DIENTE de la foto de modelo, recortado igual que el de la camara.
+
+        Se guarda por nombre de foto: detectar el diente cuesta unos milisegundos y la
+        foto de modelo no cambia entre cuadro y cuadro.
+        """
+        if referencia is None:
+            return None
+        clave = galeria.nombre_actual or ""
+        if clave not in recortes_modelo:
+            if len(recortes_modelo) > 8:
+                recortes_modelo.clear()
+            encontrados = dientes.detectar(referencia, maximo=1)
+            recortes_modelo[clave] = (
+                encontrados[0].recortar(referencia) if encontrados else referencia
+            )
+        return recortes_modelo[clave]
+
     def actualizar_orden() -> None:
         """Pone en la pantalla en que diente va la orden, si hay una abierta."""
         orden = ordenes.abierta
@@ -1315,14 +1349,22 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     juzgado = estado.congelado
                     estado.juicio = None
                     estado.dientes = _analizar_dientes(
-                        a_mostrar, memoria, cfg, referencia, ejemplos
+                        a_mostrar, memoria, cfg, recorte_modelo(referencia), ejemplos,
+                        referencia_entera=referencia,
                     )
                     # Con UN solo diente --lo normal-- el cartel grande sigue siendo el de
                     # siempre, con lo que ese diente dio. Con varios, cada uno tiene lo
                     # suyo sobre su recuadro y el cartel pasa a ser el resumen.
-                    if len(estado.dientes) == 1:
-                        estado.juicio = estado.dientes[0].juicio
                     estado.parecido = revision.parecido(a_mostrar, referencia)
+                    if len(estado.dientes) == 1:
+                        # EL CARTEL Y EL RECUADRO TIENEN QUE DECIR LO MISMO. Con un solo
+                        # diente son la misma pieza: si el cartel mostrara el parecido del
+                        # cuadro entero y el recuadro el del diente, la pantalla tendria
+                        # dos numeros --y dos colores-- para una sola sierra. Paso: 84% en
+                        # verde abajo y 40% en rojo arriba, a la vez.
+                        estado.juicio = estado.dientes[0].juicio
+                        if estado.dientes[0].parecido is not None:
+                            estado.parecido = estado.dientes[0].parecido
             # LA CAPTURA AUTOMATICA. Con una orden abierta y la imagen en vivo, el
             # programa mira una foto por segundo, la juzga, la tira, y cuando varias
             # seguidas dan lo mismo anota ese diente y pasa al siguiente. El operario

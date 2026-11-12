@@ -462,3 +462,28 @@ def test_sin_orden_abierta_no_se_anota_nada(taller: Path, monkeypatch) -> None:
     _correr([255] * 400 + [ord("q")], monkeypatch)
 
     assert _ordenes(taller).abierta is None
+
+
+def test_el_cartel_y_el_recuadro_dicen_lo_mismo(taller: Path, monkeypatch) -> None:
+    """Paso en el taller: 84% en verde en el cartel y 40% en rojo sobre el diente, los dos
+    de la misma pieza. El recuadro comparaba el RECORTE del diente contra la foto ENTERA
+    del modelo, que es comparar dos cosas distintas."""
+    estados: list = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.congelado and estado.dientes:
+            estados.append((estado.parecido, [d.parecido for d in estado.dientes]))
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+    modelo = taller / "data" / "referencia" / "microscopio" / "modelo.jpg"
+    modelo.parent.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(modelo), _diente(0))
+
+    _correr([_ESPACIO] + [255] * 5 + [ord("q")], monkeypatch)
+
+    assert estados, "no se llego a dibujar la pantalla congelada"
+    del_cartel, de_los_dientes = estados[-1]
+    assert len(de_los_dientes) == 1
+    assert del_cartel == pytest.approx(de_los_dientes[0])
