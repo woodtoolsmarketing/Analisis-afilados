@@ -103,15 +103,13 @@ class InterfazConfig:
     evaluar_en_vivo: bool = False
     nitidez_minima: float = 30.0
     frames_para_confirmar: int = 3
-    # Cuantas fotos por clase se apunta a juntar antes del primer entrenamiento. Es una
-    # META que se muestra en pantalla para que el operario sepa cuanto le falta, no un
-    # limite: el programa no deja de guardar al llegar.
+    # OBSOLETO. Era la meta de fotos por clase que la pantalla mostraba como "aprobada
+    # 12/50". Ya no se usa: el taller pidio que no haya un cupo que llenar, sino que el
+    # programa aprenda de cada foto a medida que se saca. Lo que se muestra ahora es lo
+    # que la memoria sabe y cuanto acierta (ver memoria.Memoria.resumen).
     #
-    # NO es un numero medido. Es la regla de pulgar habitual para ajustar un clasificador
-    # chico sobre un dominio estrecho y controlado --camara fija, luz fija, siempre el
-    # mismo tipo de pieza--, que es exactamente este caso. El numero de verdad sale recien
-    # cuando se entrena y se mira el acierto sobre las fotos de validacion: si queda bajo,
-    # hacen falta mas; si queda alto con pocas, alcanzo con menos.
+    # Se deja la clave aceptada para que un config viejo que la tenga escrita siga
+    # abriendo en vez de reventar con "clave desconocida" en la PC del taller.
     fotos_por_clase_objetivo: int = 50
     # Umbral del modo COMPARACION DE FOTOS, el que se usa mientras no hay modelo
     # entrenado. Va aparte de umbral_aprobacion a proposito: son dos escalas distintas y
@@ -143,6 +141,44 @@ class InterfazConfig:
 
 
 @dataclass
+class MemoriaConfig:
+    """La memoria que aprende de cada foto archivada, sin entrenar nada.
+
+    Todo lo que esta medido sobre las fotos del taller esta escrito al lado del valor. Lo
+    que NO esta medido tambien se dice, para que nadie lo lea como un dato duro.
+    """
+
+    habilitada: bool = True
+    directorio: str = "data/memoria"
+    # Cuantas fotos tiene que tener un concepto para que la memoria se anime a decidir, y
+    # hacen falta DOS conceptos asi: con uno solo todo se parece a lo unico que hay.
+    # NO esta medido: es el piso con el que una comparacion entre vecinos deja de ser una
+    # sola foto contra otra. La pantalla muestra el acierto real, que es lo que de verdad
+    # dice si alcanza.
+    minimo_por_concepto: int = 3
+    # Por debajo de este parecido, la memoria dice "esto no se parece a nada de lo que
+    # tengo" en vez de forzar un concepto. Medido: entre fotos DISTINTAS de microscopio el
+    # parecido no baja de 0.27 (alineado) ni de 0.36 (bordes); una foto que no sea una
+    # pieza --el cartel de DroidCam, la mesa, un dedo-- cae muy por debajo.
+    parecido_minimo: float = 0.35
+    # Si en las veces que la memoria estuvo igual de ajustada acerto menos que esto, no
+    # opina. Ver memoria.Autoevaluacion.confianza: el numero sale de las propias fotos del
+    # taller, no de un umbral inventado.
+    confianza_minima: float = 0.70
+    # Cuantas fotos de cada concepto pasan a la comparacion cara. Medido sobre las 19 fotos
+    # de microscopio: con 12 candidatas se conservan el 98% de los vecinos que habria
+    # elegido la comparacion exacta. Ese 98% se midio con 12 de 19 fotos; cuando haya
+    # cientos hay que volver a medirlo, y por eso esto es configurable.
+    candidatas_por_concepto: int = 6
+    # Cuantas de esas candidatas promedian el puntaje del concepto. Con 1 --o sea, el mejor
+    # suelto-- una sola foto afortunada o mal archivada decide sola.
+    vecinos_por_concepto: int = 3
+    # La autoevaluacion es O(n^2). Con mas fotos que esto se mide sobre las mas nuevas y la
+    # pantalla lo dice; recortar en silencio seria mentir con el numero de acierto.
+    maximo_autoevaluacion: int = 120
+
+
+@dataclass
 class FeedbackConfig:
     """Destino y formato de las capturas del bucle de auto-entrenamiento."""
 
@@ -164,6 +200,7 @@ class AppConfig:
     filtros: FiltrosConfig = field(default_factory=FiltrosConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     interfaz: InterfazConfig = field(default_factory=InterfazConfig)
+    memoria: MemoriaConfig = field(default_factory=MemoriaConfig)
     clases: list[str] = field(default_factory=lambda: list(CLASES_POR_DEFECTO))
     clases_defecto: list[str] = field(
         default_factory=lambda: list(CLASES_DEFECTO_POR_DEFECTO)
@@ -178,6 +215,7 @@ _SECCIONES: dict[str, type] = {
     "filtros": FiltrosConfig,
     "feedback": FeedbackConfig,
     "interfaz": InterfazConfig,
+    "memoria": MemoriaConfig,
 }
 
 
@@ -325,6 +363,35 @@ def _validar(cfg: AppConfig) -> None:
         raise ValueError(
             "interfaz.umbral_aprobacion debe estar entre 0 y 1 (0.70 = 70%), se recibio "
             f"{cfg.interfaz.umbral_aprobacion}."
+        )
+
+    for nombre, valor in (
+        ("parecido_minimo", cfg.memoria.parecido_minimo),
+        ("confianza_minima", cfg.memoria.confianza_minima),
+    ):
+        if not 0.0 <= float(valor) <= 1.0:
+            raise ValueError(
+                f"memoria.{nombre} debe estar entre 0 y 1 (0.70 = 70%), se recibio {valor}."
+            )
+    for nombre, valor in (
+        ("minimo_por_concepto", cfg.memoria.minimo_por_concepto),
+        ("candidatas_por_concepto", cfg.memoria.candidatas_por_concepto),
+        ("vecinos_por_concepto", cfg.memoria.vecinos_por_concepto),
+    ):
+        if int(valor) < 1:
+            raise ValueError(
+                f"memoria.{nombre} debe ser >= 1, se recibio {valor}."
+            )
+    if int(cfg.memoria.vecinos_por_concepto) > int(cfg.memoria.candidatas_por_concepto):
+        raise ValueError(
+            "memoria.vecinos_por_concepto no puede superar a candidatas_por_concepto "
+            f"({cfg.memoria.vecinos_por_concepto} > {cfg.memoria.candidatas_por_concepto}): "
+            "se promediarian vecinos que nunca se midieron."
+        )
+    if int(cfg.memoria.maximo_autoevaluacion) < 0:
+        raise ValueError(
+            "memoria.maximo_autoevaluacion no puede ser negativo, se recibio "
+            f"{cfg.memoria.maximo_autoevaluacion}. Con 0 se mide sobre todas las fotos."
         )
 
     if cfg.interfaz.modo not in MODOS_INTERFAZ:

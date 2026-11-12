@@ -27,6 +27,7 @@ import numpy as np
 
 from . import tipografia
 from .config import AppConfig
+from .memoria import Juicio
 from .overlay import _color_texto, _tamano_texto, texto_con_fondo
 from .tipos import Veredicto
 
@@ -76,6 +77,16 @@ class EstadoRevision:
     # Parecido con la foto de modelo, 0..1, medido foto contra foto. Es el veredicto de
     # respaldo mientras no haya modelo entrenado. Ver revision.parecido().
     parecido: Optional[float] = None
+    # Lo que dice la MEMORIA: en que concepto cae esta foto segun todas las archivadas.
+    # Tiene prioridad sobre el parecido contra una sola foto de modelo, porque compara
+    # contra todo lo que el taller junto, no contra la que quedo elegida. Ver memoria.py.
+    juicio: Optional["Juicio"] = None
+    # Una linea con lo que la memoria sabe hoy: cuantas fotos, de que conceptos, y cuanto
+    # acierta sobre ellas. Reemplaza al viejo contador de "12 de 50".
+    resumen_memoria: str = ""
+    # Los destinos rapidos de la barra: (clave, etiqueta, es_defecto). Vacio = los dos de
+    # siempre. Los llena run_live con los conceptos que de verdad existen.
+    botones_guardar: list[tuple[str, str, bool]] = field(default_factory=list)
 
 
 @dataclass
@@ -651,6 +662,12 @@ def estado_resultado(
     valor = coincidencia(estado.veredicto, cfg)
     origen = "segun el modelo entrenado"
     umbral = float(cfg.interfaz.umbral_aprobacion)
+    # Sin modelo entrenado manda la MEMORIA, que compara contra TODAS las fotos archivadas,
+    # y recien despues el parecido contra la unica foto de modelo que este elegida. El
+    # orden no es un detalle: una foto suelta puede no ser representativa de nada, y
+    # treinta fotos archivadas por el taller si lo son.
+    if valor is None and estado.juicio is not None:
+        return _resultado_de_memoria(estado.juicio, cfg)
     if valor is None and estado.parecido is not None:
         if not getattr(cfg.interfaz, "veredicto_por_parecido", False):
             # Se MUESTRA el parecido, pero no se lo disfraza de veredicto. Medido sobre las
@@ -676,22 +693,85 @@ def estado_resultado(
     return "DESAPROBADO", detalle, _ROJO_NO, False
 
 
+def _resultado_de_memoria(juicio: Juicio, cfg: AppConfig) -> tuple[str, str, tuple, Optional[bool]]:
+    """El cartel cuando quien opina es la memoria de fotos archivadas.
+
+    NO SE FUERZA UN VEREDICTO. Cuando la memoria no se anima --porque los dos conceptos
+    quedaron parejos, o porque la foto no se parece a nada de lo guardado-- la pantalla lo
+    dice con el motivo. Un "APROBADO" salido de un empate es peor que no decir nada: el
+    operario no tiene como saber que fue un empate.
+    """
+    if not juicio.decidio:
+        titulo = "SIN MEMORIA" if not juicio.vecinos else "NO ESTOY SEGURO"
+        return titulo, juicio.motivo or "la memoria no tiene con que comparar", _AMBAR, None
+
+    nombre = str(juicio.concepto)
+    detalle = (
+        f"se parece a {nombre} ({juicio.parecido * 100:.0f}%) - "
+        f"entre las {juicio.fotos_en_memoria} fotos guardadas"
+    )
+    if nombre in cfg.clases_defecto:
+        return "DESAPROBADO", detalle, _ROJO_NO, False
+    return "APROBADO", detalle, _VERDE_OK, True
+
+
+def detalle_extra(estado: EstadoRevision, cfg: AppConfig) -> Optional[str]:
+    """Segunda linea del cartel: lo fino del analisis, cuando hay algo fino que decir.
+
+    Va aparte del detalle principal porque es lo que se lee DESPUES de decidir: cuanto
+    acierta la memoria en casos igual de ajustados, y en que parte de la imagen esta la
+    diferencia. Un porcentaje dice cuanto se parece; la zona dice donde mirar.
+    """
+    juicio = estado.juicio
+    if juicio is None or not juicio.decidio:
+        return None
+    partes = []
+    if juicio.confianza is not None:
+        partes.append(
+            f"asi de parejo, la memoria acierta {juicio.confianza * 100:.0f}% de las veces"
+        )
+    elif juicio.fotos_en_memoria:
+        partes.append("todavia hay pocas fotos para medir cuanto acierta")
+    if juicio.zona:
+        partes.append(f"la mayor diferencia esta {juicio.zona}")
+    return "   -   ".join(partes) if partes else None
+
+
 def _progreso_del_dataset(estado: EstadoRevision, cfg) -> str:
     """Que decir debajo de SIN MODELO.
 
-    "todavia no hay modelo entrenado" era cierto y a la vez inutil: no dice que el modelo
-    se construye juntando fotos con a/r, ni cuantas faltan. Con el conteo a la vista, la
-    misma pantalla pasa de informar un faltante a mostrar un avance.
+    "todavia no hay modelo entrenado" era cierto y a la vez inutil: no dice que el programa
+    aprende de las fotos que el operario archiva. Lo que se muestra es lo que la memoria ya
+    sabe. Antes aca iba una meta --"aprobada 12/50"--; el taller pidio que no haya cupo que
+    llenar, asi que lo que se informa es el estado, no cuanto falta.
     """
+    if estado.resumen_memoria:
+        return estado.resumen_memoria
     if not estado.conteos:
-        return "guarde fotos con APROBADA y RECHAZADA para entrenar"
-    meta = int(getattr(cfg.interfaz, "fotos_por_clase_objetivo", 0) or 0)
-    partes = []
-    for clase, cantidad in estado.conteos.items():
-        partes.append(f"{clase} {cantidad}/{meta}" if meta else f"{clase} {cantidad}")
-    if meta and all(c >= meta for c in estado.conteos.values()):
-        return "ya hay fotos suficientes: " + "  ".join(partes) + "  - listo para entrenar"
-    return "juntando fotos:  " + "  ".join(partes)
+        return "guarde fotos con APROBADA y RECHAZADA para que el programa aprenda"
+    partes = [f"{clase} {cantidad}" for clase, cantidad in estado.conteos.items()]
+    return "fotos guardadas:  " + "  ".join(partes)
+
+
+def _boton_a_la_izquierda(
+    img: np.ndarray, tope: int, y1: int, y2: int, clave: str, texto: str, color,
+    botones: dict[str, Rect], etiquetas: list,
+) -> int:
+    """Pone un boton pegado a la izquierda de `tope`, si entra. Devuelve el nuevo tope.
+
+    Si no entra no se dibuja, en vez de montarse sobre el de al lado. Todo lo que esta aca
+    tiene su tecla, asi que un boton que no entra no deja a nadie sin poder hacer la
+    operacion.
+    """
+    ancho, _ = tipografia.medir(texto, 21, negrita=True)
+    x = tope - 12 - ancho - 2 * _RELLENO_BOTON
+    ocupado = max((r[2] for r in botones.values() if r[0] < x), default=0)
+    if x <= ocupado + 12:
+        return tope
+    rect = _boton_lindo(img, x, y1, y2, texto, color)
+    botones[clave] = rect
+    etiquetas.append((texto, rect, color))
+    return x
 
 
 def _boton_lindo(
@@ -773,11 +853,17 @@ def componer_simple(
     botones: dict[str, Rect] = {}
     etiquetas: list[tuple[str, Rect, tuple]] = []
     if estado.congelado:
-        for clave, texto_boton, color_boton in (
-            ("seguir", "OTRA PIEZA", _SUPERFICIE),
-            ("aprobada", "GUARDAR BUENA", _VERDE_OK),
-            ("rechazada", "GUARDAR MALA", _ROJO_NO),
-        ):
+        # Los destinos rapidos salen de los conceptos que haya: con el esquema de siempre
+        # son "aprobada" y "rechazada", pero si el taller creo otros, los botones los
+        # siguen. Lo que no entre en la barra se alcanza desde el panel de CONCEPTOS.
+        destinos = estado.botones_guardar or [
+            ("aprobada", "GUARDAR BUENA", False),
+            ("rechazada", "GUARDAR MALA", True),
+        ]
+        rapidos: list[tuple[str, str, tuple]] = [("seguir", "OTRA PIEZA", _SUPERFICIE)]
+        for clave, etiqueta, es_defecto in destinos[:2]:
+            rapidos.append((clave, etiqueta, _ROJO_NO if es_defecto else _VERDE_OK))
+        for clave, texto_boton, color_boton in rapidos:
             x = margen if not botones else max(r[2] for r in botones.values()) + 12
             rect = _boton_lindo(lienzo, x, y1, y2, texto_boton, color_boton)
             botones[clave] = rect
@@ -793,17 +879,18 @@ def componer_simple(
     botones["salir"] = rect_salir
     etiquetas.append(("SALIR", rect_salir, _SUPERFICIE))
 
-    # Cambiar de modelo solo tiene sentido si hay mas de uno cargado. Se ubica pegado a
-    # SALIR, calculando hacia la izquierda, para que no choque con los de guardar.
+    # Los de la derecha se van acomodando hacia la izquierda y se saltean si no entran:
+    # ninguno puede montarse sobre los de guardar, que son los que deciden si una sierra
+    # se tira o no.
+    tope = x_salir
+    # Cambiar de modelo solo tiene sentido si hay mas de uno cargado.
     if estado.posicion_referencia[1] > 1:
-        texto_modelo = "OTRO MODELO"
-        ancho_mod, _ = tipografia.medir(texto_modelo, 21, negrita=True)
-        x_mod = x_salir - 12 - ancho_mod - 2 * _RELLENO_BOTON
-        ocupado = max((r[2] for r in botones.values() if r[0] < x_mod), default=0)
-        if x_mod > ocupado + 12:
-            rect_mod = _boton_lindo(lienzo, x_mod, y1, y2, texto_modelo, _SUPERFICIE)
-            botones["modelo"] = rect_mod
-            etiquetas.append((texto_modelo, rect_mod, _SUPERFICIE))
+        tope = _boton_a_la_izquierda(
+            lienzo, tope, y1, y2, "modelo", "OTRO MODELO", _SUPERFICIE, botones, etiquetas
+        )
+    tope = _boton_a_la_izquierda(
+        lienzo, tope, y1, y2, "conceptos", "CONCEPTOS", _AZUL, botones, etiquetas
+    )
 
     rect_mensaje = None
     if estado.mensaje:
@@ -844,6 +931,14 @@ def componer_simple(
         pincel.texto(titulo, (x_texto, cy - alto_v - 10),
                      color if aprobado is not None else _TEXTO, tamano_v, True)
         pincel.texto(detalle, (x_texto + 2, cy + 6), _TEXTO_TENUE, 19)
+
+        # La segunda linea solo cabe cuando no hay barra de coincidencia, que ocupa ese
+        # mismo renglon. Con la memoria no hay barra --no es una probabilidad-- asi que ahi
+        # es donde va lo fino del analisis.
+        if valor is None:
+            extra = detalle_extra(estado, cfg)
+            if extra:
+                pincel.texto(extra, (x_texto + 2, cy + 34), _TEXTO_TENUE, 16)
 
         if valor is not None:
             texto_umbral = f"minimo {cfg.interfaz.umbral_aprobacion * 100:.0f}%"

@@ -8,8 +8,12 @@ Estructura que genera:
     <salida>/train/<clase>/*.jpg
     <salida>/val/<clase>/*.jpg
 
-Ejemplo (las dos tandas de la primera prueba):
+Lo normal es tomar los CONCEPTOS tal como quedaron en el programa del taller:
+    python scripts/construir_clasificacion.py --coleccion data/coleccion
+
+Y si hay tandas sueltas en otro lado, se suman a mano (se pueden mezclar las dos formas):
     python scripts/construir_clasificacion.py ^
+        --coleccion data/coleccion ^
         --clase aprobada  "C:/ruta/tanda_sierras_buenas" ^
         --clase rechazada "C:/ruta/tanda_no_afilables"
 
@@ -26,6 +30,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from afilado.conceptos import Conceptos  # noqa: E402
 
 _EXTENSIONES = (".jpg", ".jpeg", ".png", ".bmp")
 
@@ -51,11 +59,20 @@ def _construir_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--coleccion",
+        default=None,
+        metavar="CARPETA",
+        help=(
+            "Carpeta de coleccion del taller: toma TODOS los conceptos que haya adentro, con "
+            "los nombres que les puso el operario desde el panel. Las carpetas que empiezan "
+            "con _ (como _papelera, donde van las fotos borradas) quedan afuera."
+        ),
+    )
+    parser.add_argument(
         "--clase",
         action="append",
         nargs=2,
         metavar=("NOMBRE", "CARPETA"),
-        required=True,
         help=(
             "Nombre de la clase y carpeta con sus fotos. Repetir por cada clase. Si repetis el "
             "MISMO nombre con otra carpeta, se juntan (util para combinar tandas + coleccion "
@@ -101,12 +118,38 @@ def main(argv: list[str] | None = None) -> int:
 
     # Agrupar carpetas por nombre de clase: un mismo nombre puede venir de varias carpetas.
     carpetas_por_clase: dict[str, list[Path]] = {}
-    for nombre, carpeta_str in args.clase:
+
+    if args.coleccion:
+        # Los conceptos son los que el operario dejo en el programa, con el nombre que les
+        # puso. Enumerarlos aca --en vez de escribirlos a mano-- evita el error que mas caro
+        # sale: entrenar sin una clase porque alguien se olvido de agregarla a la linea de
+        # comandos, y que el modelo nunca pueda decirla.
+        conceptos = Conceptos(str(args.coleccion))
+        for concepto in conceptos.listar():
+            if concepto.fotos == 0:
+                print(f"AVISO: el concepto '{concepto.nombre}' no tiene fotos; se saltea.")
+                continue
+            carpetas_por_clase.setdefault(concepto.nombre, []).append(concepto.carpeta)
+        if not carpetas_por_clase:
+            print(f"ERROR: no hay ningun concepto con fotos en {args.coleccion}")
+            return 2
+
+    for nombre, carpeta_str in args.clase or []:
         carpeta = Path(carpeta_str)
         if not carpeta.is_dir():
             print(f"ERROR: la carpeta de la clase '{nombre}' no existe: {carpeta}")
             return 2
         carpetas_por_clase.setdefault(nombre, []).append(carpeta)
+
+    if not carpetas_por_clase:
+        print("ERROR: hay que indicar --coleccion o al menos un --clase.")
+        return 2
+    if len(carpetas_por_clase) < 2:
+        print(
+            f"ERROR: hay una sola clase ({', '.join(carpetas_por_clase)}). Un clasificador "
+            "con una sola clase dice siempre lo mismo y acierta el 100%: no sirve para nada."
+        )
+        return 2
 
     rng = random.Random(args.semilla)
     total_train = total_val = 0

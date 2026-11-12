@@ -185,20 +185,12 @@ interfaz:
   # el veredicto parpadea con cada temblor de la mano, y un cartel que parpadea es un cartel
   # que el operario deja de mirar.
   frames_para_confirmar: 3
-  # META de fotos por clase antes del primer entrenamiento. Mientras no haya modelo, la
-  # pantalla muestra el avance abajo del cartel: "juntando fotos: aprobada 12/50
-  # rechazada 8/50", y avisa cuando las dos clases llegan.
+  # OBSOLETO, se deja para que un config viejo no reviente al abrir. Era la meta de
+  # fotos por clase --"aprobada 12/50"-- que la pantalla mostraba abajo del cartel.
   #
-  # Es una meta, no un limite: el programa no deja de guardar al llegar, y mas fotos
-  # siempre vienen bien.
-  #
-  # NO es un numero medido. Es la regla de pulgar habitual para ajustar un clasificador
-  # chico sobre un dominio estrecho y controlado --camara fija, luz fija, siempre el mismo
-  # tipo de pieza--, que es este caso. El numero de verdad sale recien al entrenar y mirar
-  # el acierto sobre las fotos de validacion: si queda bajo, hacen falta mas.
-  #
-  # LAS DOS CLASES TIENEN QUE CRECER JUNTAS. Con 80 buenas y 3 malas no se entrena nada
-  # util: al modelo le conviene decir "buena" siempre y acierta el 96%.
+  # El taller pidio que no haya cupo que llenar: el programa tiene que aprender de cada
+  # foto a medida que se saca. Lo que la pantalla muestra ahora es lo que la memoria sabe
+  # y cuanto acierta; ver la seccion memoria mas abajo.
   fotos_por_clase_objetivo: 50
   # A partir de que PARECIDO con la foto de modelo se da por APROBADO, mientras no haya
   # modelo entrenado. 0.70 = 70%.
@@ -227,6 +219,70 @@ interfaz:
   #
   # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
   veredicto_por_parecido: true
+
+# ---------------------------------------------------------------------------
+# LA MEMORIA: el programa aprende de cada foto que se archiva, sin entrenar nada.
+#
+# Como funciona, en una linea: cada foto que se guarda en un concepto se suma a lo que el
+# programa compara, y el veredicto de la foto siguiente ya la tiene en cuenta. No hay cupo
+# que llenar ni boton de entrenar.
+#
+# QUIEN OPINA, EN ESTE ORDEN:
+#   1. el modelo entrenado, si hay uno (detector.pesos)
+#   2. la memoria, si tiene minimo_por_concepto fotos en al menos dos conceptos
+#   3. el parecido contra la foto de modelo elegida (umbral_parecido, aca arriba)
+#   4. nada: la pantalla dice SIN MODELO y muestra lo que la memoria lleva juntado
+# La pantalla SIEMPRE dice de donde salio el numero que esta mostrando.
+#
+# LO QUE LA MEMORIA MIDE DE SI MISMA: esconde cada foto guardada y le pregunta a las demas
+# en que concepto va. Ese acierto --"acierta 21 de 24"-- sale de las fotos de este taller,
+# se actualiza con cada foto nueva, y es el unico numero honesto sobre cuanta precision
+# tiene esto. De ahi sale tambien la confianza con que decide.
+# ---------------------------------------------------------------------------
+memoria:
+  # En false el programa se comporta como antes: modelo entrenado o parecido contra la
+  # foto de modelo, nada mas.
+  habilitada: true
+  # Donde queda la cache de lo analizado. Las FOTOS no viven aca --viven en
+  # data/coleccion/<concepto>-- esto es solo lo que el programa calculo de ellas, para no
+  # tener que volver a leer todo el disco en cada arranque. Se puede borrar sin perder
+  # nada: se rehace sola.
+  directorio: data/memoria
+  # Cuantas fotos tiene que tener un concepto para que la memoria se anime a decidir, y
+  # hacen falta DOS conceptos asi. Con uno solo no hay decision posible: todo se parece a
+  # lo unico que hay.
+  #
+  # NO es un numero medido. Mientras no se llegue, la pantalla sigue mostrando el parecido
+  # contra la foto de modelo, que es el modo anterior.
+  minimo_por_concepto: 3
+  # Por debajo de este parecido la memoria dice "esto no se parece a nada de lo que tengo"
+  # en vez de forzar un concepto. Medido sobre las fotos de microscopio: entre fotos
+  # DISTINTAS el parecido no baja de 0.27 alineado ni de 0.36 en bordes, asi que una foto
+  # que no sea una pieza --el cartel de DroidCam, la mesa, un dedo-- cae muy por debajo.
+  parecido_minimo: 0.35
+  # Si en las veces que la memoria estuvo IGUAL DE AJUSTADA acerto menos que esto, no
+  # opina: la pantalla dice NO ESTOY SEGURO y explica por que.
+  #
+  # El numero contra el que se compara no es inventado: sale de esconder cada foto
+  # guardada y ver si las demas la ubican bien. Bajarlo hace que opine mas seguido y se
+  # equivoque mas seguido.
+  confianza_minima: 0.70
+  # Cuantas fotos de cada concepto pasan a la comparacion cara (la que alinea las dos
+  # imagenes). El resto se descarta con una cuenta barata que cuesta 0.1 microsegundos por
+  # foto, asi que la memoria puede crecer sin limite: con mil fotos el veredicto sigue
+  # saliendo en milisegundos.
+  #
+  # Medido sobre las 19 fotos de microscopio: con 12 candidatas se conservan el 98% de los
+  # vecinos que habria elegido la comparacion exacta. Ojo, ese 98% se midio con 12 de 19
+  # fotos; cuando haya cientos hay que volver a medirlo y quiza subir este numero.
+  candidatas_por_concepto: 6
+  # Cuantas de esas candidatas promedian el puntaje del concepto. Con 1 --el mejor suelto--
+  # una sola foto afortunada, o mal archivada, decide sola.
+  vecinos_por_concepto: 3
+  # La autoevaluacion compara todas contra todas, asi que crece al cuadrado. Pasado este
+  # numero se mide sobre las mas nuevas y la pantalla lo dice ("acierta 97 de las ultimas
+  # 120"). Con 0 se mide siempre sobre todas, cueste lo que cueste.
+  maximo_autoevaluacion: 120
 
 detector:
   # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:

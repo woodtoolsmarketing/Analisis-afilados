@@ -111,6 +111,6 @@ def test_la_pantalla_entera_se_dibuja_sin_pillow(monkeypatch: pytest.MonkeyPatch
         )
 
         assert pantalla.imagen.shape[1] == revision.ANCHO_LIENZO
-        assert set(pantalla.botones) == {"seguir", "aprobada", "rechazada", "salir"}
+        assert set(pantalla.botones) == {"seguir", "aprobada", "rechazada", "conceptos", "salir"}
     finally:
         tipografia._cache.clear()

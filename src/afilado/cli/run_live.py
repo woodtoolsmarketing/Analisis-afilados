@@ -35,18 +35,34 @@ from typing import Optional, Union
 import cv2
 import numpy as np
 
-from .. import overlay, revision
+from .. import overlay, panel, revision
 from ..referencias import GaleriaReferencias
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara, enumerar_camaras
+from ..conceptos import (
+    EXTENSIONES,
+    LARGO_MAXIMO,
+    Concepto,
+    Conceptos,
+    caracter_valido,
+    sanear,
+)
 from ..config import AppConfig, cargar_config, raiz_repo, ruta_absoluta
 from ..detector import crear_clasificador
+from ..memoria import Memoria
 from ..pipeline import Pipeline
 from ..tipos import ResultadoFrame, Veredicto
 
 # Carpeta donde el modo clasificacion archiva las fotos por clase. Su estructura es
 # exactamente la que consume scripts/construir_clasificacion.py: <dir>/<clase>/*.jpg
 _DIR_COLECCION = "data/coleccion"
+
+# La galeria de fotos de modelo aparece en el panel como un destino mas. No es un concepto
+# --no dice si el filo esta sano, dice que modelo de sierra es-- pero ES una carpeta a la
+# que el operario manda fotos, y el registro del taller muestra que es la que mas usa. Si
+# no estuviera en la misma lista, el panel contestaria a medias la pregunta "a donde va
+# esta foto".
+_DESTINO_MODELO = "foto de modelo"
 
 # Donde queda el registro de lo que paso. Abierto con doble clic NO hay consola --esa es
 # justamente la idea-- asi que si el log solo fuera a pantalla se perderia entero, y es lo
@@ -247,6 +263,236 @@ def _clases_de_teclas(cfg: AppConfig) -> dict[int, str]:
     clase_sana = sanas[0] if sanas else cfg.clases[0]
     clase_defecto = cfg.clases_defecto[0] if cfg.clases_defecto else cfg.clases[-1]
     return {ord("a"): clase_sana, ord("r"): clase_defecto}
+
+
+# Etiquetas de taller para los dos conceptos de siempre. "GUARDAR BUENA" se lee de un
+# vistazo desde lejos; "GUARDAR APROBADA" no es mas claro y ocupa mas. Para un concepto
+# que invento el taller se usa su propio nombre, que es el unico que significa algo.
+_ETIQUETAS_AMIGAS = {"aprobada": "GUARDAR BUENA", "rechazada": "GUARDAR MALA"}
+
+_TECLAS_DIGITO = {ord(str(numero)): numero for numero in range(1, 10)}
+
+
+def _volcar_conceptos(cfg: AppConfig, conceptos: Conceptos) -> None:
+    """Hace que cfg.clases sea lo que hay en disco, no lo que diga el YAML.
+
+    El config queda como semilla del primer arranque. Despues la lista vive en las carpetas
+    y en el panel, que es donde el operario la puede cambiar.
+    """
+    nombres = conceptos.nombres()
+    if not nombres:
+        # Sin carpetas todavia se respeta el config: el programa necesita al menos una
+        # clase para poder archivar algo.
+        return
+    cfg.clases = nombres
+    cfg.clases_defecto = [n for n in conceptos.defectos() if n in nombres]
+
+
+def _destinos_rapidos(cfg: AppConfig) -> list[tuple[str, str, bool]]:
+    """Los dos botones de guardado directo: el primer concepto sano y el primero de defecto."""
+    sanas = [c for c in cfg.clases if c not in cfg.clases_defecto]
+    defectuosas = [c for c in cfg.clases if c in cfg.clases_defecto]
+    destinos: list[tuple[str, str, bool]] = []
+    for nombre, es_defecto in ((sanas[:1], False), (defectuosas[:1], True)):
+        for clase in nombre:
+            destinos.append(
+                (clase, _ETIQUETAS_AMIGAS.get(clase, f"GUARDAR {clase.upper()}"), es_defecto)
+            )
+    return destinos
+
+
+def _lista_para_panel(conceptos: Conceptos, galeria: GaleriaReferencias) -> list[Concepto]:
+    """Los conceptos mas la galeria de modelos, que es el otro destino posible de una foto."""
+    modelo = Concepto(
+        nombre=_DESTINO_MODELO,
+        carpeta=galeria.carpeta,
+        fotos=galeria.cantidad,
+        defecto=False,
+        especial=True,
+    )
+    return [modelo] + conceptos.listar()
+
+
+def _fotos_del_destino(
+    destino: Optional[Concepto], conceptos: Conceptos, galeria: GaleriaReferencias
+) -> list[Path]:
+    if destino is None:
+        return []
+    if destino.especial:
+        carpeta = galeria.carpeta
+        if not carpeta.is_dir():
+            return []
+        return sorted(
+            (p for p in carpeta.iterdir()
+             if p.is_file() and p.suffix.lower() in EXTENSIONES),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+    return conceptos.fotos(destino.nombre)
+
+
+def _atender_panel(
+    accion: Optional[str],
+    tecla: int,
+    pan: panel.EstadoPanel,
+    conceptos: Conceptos,
+    galeria: GaleriaReferencias,
+    miniaturas: panel.Miniaturas,
+    archivar,
+    refrescar,
+) -> tuple[bool, Optional[str]]:
+    """Resuelve una tecla o un clic del panel. Devuelve (sigue_abierto, mensaje).
+
+    Vive en run_live y no en panel.py por la misma razon que revision.py no lee teclas:
+    el que dibuja no decide. Aca se puede leer de corrido que hace cada tecla.
+    """
+    if pan.modo == panel.MODO_NUEVO:
+        return _panel_nuevo(accion, tecla, pan, conceptos, refrescar)
+    if pan.modo == panel.MODO_BORRAR:
+        return _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar)
+    if pan.modo == panel.MODO_FOTOS:
+        return _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar)
+    return _panel_lista(accion, tecla, pan, conceptos, galeria, miniaturas, archivar)
+
+
+def _panel_lista(
+    accion, tecla, pan, conceptos, galeria, miniaturas, archivar
+) -> tuple[bool, Optional[str]]:
+    if accion == "volver" or tecla in (_ESC, ord("q")):
+        return False, None
+
+    if accion is not None and accion.startswith("elegir:"):
+        pan.elegido = int(accion.split(":", 1)[1])
+        pan.aviso = None
+    elif tecla in _TECLAS_DIGITO:
+        indice = _TECLAS_DIGITO[tecla] - 1
+        if indice < len(pan.conceptos):
+            pan.elegido = indice
+    elif tecla == ord("s"):
+        pan.mover(1)
+    elif tecla == ord("w"):
+        pan.mover(-1)
+
+    elegido = pan.concepto_elegido
+    if accion == "nuevo" or tecla == ord("n"):
+        pan.modo, pan.escribiendo, pan.aviso = panel.MODO_NUEVO, "", None
+    elif (accion == "borrar" or tecla == ord("b")) and elegido is not None:
+        if elegido.especial:
+            pan.aviso = (
+                "'foto de modelo' no es un concepto que se pueda borrar; sus fotos se "
+                "sacan de a una desde VER FOTOS"
+            )
+        else:
+            pan.modo = panel.MODO_BORRAR
+    elif (accion == "fotos" or tecla == ord("v")) and elegido is not None:
+        pan.fotos = _fotos_del_destino(elegido, conceptos, galeria)
+        pan.modo, pan.pagina, pan.foto_elegida, pan.aviso = panel.MODO_FOTOS, 0, 0, None
+        miniaturas.olvidar()
+    elif (accion == "guardar_aqui" or tecla == 13) and elegido is not None:
+        try:
+            return False, archivar(elegido.nombre)
+        except (OSError, ValueError) as error:
+            _registro.error("no se pudo archivar en '%s': %s", elegido.nombre, error)
+            pan.aviso = "no se pudo guardar; revise el disco"
+    return True, None
+
+
+def _panel_nuevo(accion, tecla, pan, conceptos, refrescar) -> tuple[bool, Optional[str]]:
+    if accion == "volver_lista" or tecla == _ESC:
+        pan.modo, pan.escribiendo, pan.aviso = panel.MODO_LISTA, "", None
+        return True, None
+
+    if accion == "confirmar_nuevo" or tecla == 13:
+        nombre = sanear(pan.escribiendo)
+        if not nombre:
+            pan.aviso = "escribi un nombre para el concepto"
+            return True, None
+        try:
+            nuevo = conceptos.agregar(nombre)
+        except (ValueError, OSError) as error:
+            pan.aviso = str(error)
+            return True, None
+        refrescar()
+        pan.modo, pan.escribiendo, pan.aviso = panel.MODO_LISTA, "", None
+        for indice, concepto in enumerate(pan.conceptos):
+            if concepto.nombre == nuevo.nombre:
+                pan.elegido = indice
+                break
+        return True, f"CONCEPTO NUEVO: {nuevo.nombre}"
+
+    if tecla in (8, 127):  # retroceso
+        pan.escribiendo = pan.escribiendo[:-1]
+    elif 32 <= tecla <= 126 and len(pan.escribiendo) < LARGO_MAXIMO:
+        letra = chr(tecla)
+        if caracter_valido(letra):
+            pan.escribiendo += letra
+        else:
+            pan.aviso = "solo letras, numeros, espacios y guiones"
+    return True, None
+
+
+def _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar):
+    elegido = pan.concepto_elegido
+    if accion == "confirmar_borrado" or tecla in (ord("s"), 13):
+        if elegido is None:
+            pan.modo = panel.MODO_LISTA
+            return True, None
+        nombre = elegido.nombre
+        try:
+            cuantas = conceptos.eliminar(nombre)
+        except (ValueError, OSError) as error:
+            _registro.error("no se pudo borrar el concepto '%s': %s", nombre, error)
+            pan.modo, pan.aviso = panel.MODO_LISTA, "no se pudo borrar; revise el disco"
+            return True, None
+        miniaturas.olvidar()
+        refrescar()
+        pan.modo = panel.MODO_LISTA
+        return True, f"'{nombre}' y sus {cuantas} foto(s) fueron a _papelera"
+    if accion == "volver_lista" or tecla in (_ESC, ord("n"), ord("q")):
+        pan.modo = panel.MODO_LISTA
+    return True, None
+
+
+def _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar):
+    if accion == "volver_lista" or tecla in (_ESC, ord("q"), ord("v")):
+        pan.modo, pan.aviso = panel.MODO_LISTA, None
+        miniaturas.olvidar()
+        return True, None
+
+    paginas = max(1, (len(pan.fotos) + panel._POR_PAGINA - 1) // panel._POR_PAGINA)
+    if accion is not None and accion.startswith("foto:"):
+        pan.foto_elegida = int(accion.split(":", 1)[1])
+    elif tecla in _TECLAS_DIGITO:
+        indice = pan.pagina * panel._POR_PAGINA + _TECLAS_DIGITO[tecla] - 1
+        if indice < len(pan.fotos):
+            pan.foto_elegida = indice
+    elif accion == "siguiente_pagina" or tecla == ord(" "):
+        pan.pagina = (pan.pagina + 1) % paginas
+        pan.foto_elegida = pan.pagina * panel._POR_PAGINA
+
+    if accion == "borrar_foto" or tecla == ord("b"):
+        if not 0 <= pan.foto_elegida < len(pan.fotos):
+            return True, None
+        ruta = pan.fotos[pan.foto_elegida]
+        elegido = pan.concepto_elegido
+        try:
+            conceptos.eliminar_foto(ruta)
+        except (ValueError, OSError) as error:
+            _registro.error("no se pudo borrar la foto %s: %s", ruta, error)
+            pan.aviso = "no se pudo borrar la foto; revise el disco"
+            return True, None
+        miniaturas.olvidar(ruta)
+        if elegido is not None and elegido.especial:
+            galeria.recargar()
+        refrescar()
+        pan.fotos = _fotos_del_destino(pan.concepto_elegido, conceptos, galeria)
+        pan.foto_elegida = max(0, min(pan.foto_elegida, len(pan.fotos) - 1))
+        pan.pagina = min(
+            pan.pagina,
+            max(0, (len(pan.fotos) + panel._POR_PAGINA - 1) // panel._POR_PAGINA - 1),
+        )
+        return True, f"FOTO A LA PAPELERA: {ruta.name}"
+    return True, None
 
 
 def _ejecutar_clasificacion(cfg: AppConfig, args: argparse.Namespace) -> int:
@@ -489,6 +735,10 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     parpadea es un veredicto que el operario aprende a ignorar.
     """
     clasificador = crear_clasificador(cfg)
+    # Los conceptos mandan sobre la lista de clases del config: son las carpetas que hay de
+    # verdad en disco, y el operario las cambia desde el panel sin tocar el YAML.
+    conceptos = Conceptos(_DIR_COLECCION, cfg.clases, cfg.clases_defecto)
+    _volcar_conceptos(cfg, conceptos)
     almacen = AlmacenClasificacion(_DIR_COLECCION, cfg.clases, cfg.feedback.calidad_jpg)
     teclas_clase = _clases_de_teclas(cfg)
     fuente_es_camara = _es_camara(cfg.camara.fuente)
@@ -540,8 +790,21 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         )
     _registro.info(
         "espacio o clic en REVISAR congela | a/r guardan la pieza | "
-        "f agrega foto de modelo | m cambia de modelo | q sale"
+        "c abre los conceptos | f agrega foto de modelo | m cambia de modelo | q sale"
     )
+
+    # La memoria: lo que el programa aprendio de las fotos ya archivadas. Se pone al dia
+    # antes de empezar, leyendo del disco solo lo que haya cambiado.
+    memoria: Optional[Memoria] = None
+    if cfg.memoria.habilitada:
+        memoria = Memoria(
+            cfg.memoria.directorio,
+            candidatas_por_concepto=cfg.memoria.candidatas_por_concepto,
+            vecinos_por_concepto=cfg.memoria.vecinos_por_concepto,
+            maximo_autoevaluacion=cfg.memoria.maximo_autoevaluacion,
+        )
+        memoria.sincronizar(conceptos.mapa())
+        _registro.info("%s", memoria.resumen())
 
     # Los clics llegan por un callback de OpenCV, que corre fuera del bucle: se encolan y se
     # atienden en el frame siguiente. Con la ventana redimensionable, OpenCV entrega las
@@ -560,6 +823,70 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     # Se cuenta UNA vez al arrancar y despues de cada guardado, no en cada frame: son
     # lecturas de disco y el bucle corre a 17 fps.
     estado.conteos = almacen.conteo_por_clase()
+
+    # El panel de conceptos. None = cerrado; mientras este abierto, la camara no se lee y
+    # la pantalla es el panel.
+    pan: Optional[panel.EstadoPanel] = None
+    miniaturas = panel.Miniaturas()
+    alto_lienzo = revision.ALTO_MINIMO_LIENZO
+
+    def refrescar(recalcular: bool = True) -> None:
+        """Pone al dia todo lo que depende de que fotos y conceptos hay.
+
+        Se llama cuando algo CAMBIO --se guardo una foto, se creo o borro un concepto--,
+        nunca en cada cuadro: son lecturas de disco.
+        """
+        conceptos.recargar()
+        _volcar_conceptos(cfg, conceptos)
+        almacen.clases = cfg.clases
+        teclas_clase.clear()
+        teclas_clase.update(_clases_de_teclas(cfg))
+        estado.conteos = almacen.conteo_por_clase()
+        estado.botones_guardar = _destinos_rapidos(cfg)
+        if memoria is not None:
+            memoria.sincronizar(conceptos.mapa())
+            if recalcular:
+                # Medirse cuesta, asi que se hace aca --justo despues de un cambio, con el
+                # operario mirando un cartel-- y no en medio de un veredicto.
+                memoria.autoevaluacion()
+            estado.resumen_memoria = memoria.resumen()
+        if pan is not None:
+            # La seleccion se sigue por NOMBRE y no por posicion: si se borro un concepto
+            # de mas arriba, el indice apuntaria a otro y el siguiente BORRAR se llevaria
+            # puesto al que no era.
+            anterior = pan.concepto_elegido.nombre if pan.concepto_elegido else None
+            pan.conceptos = _lista_para_panel(conceptos, galeria)
+            pan.elegido = next(
+                (i for i, c in enumerate(pan.conceptos) if c.nombre == anterior), 0
+            )
+            pan.elegido = max(0, min(pan.elegido, len(pan.conceptos) - 1))
+            pan.resumen = estado.resumen_memoria
+            pan.aciertos = (
+                memoria.autoevaluacion().por_concepto if memoria is not None else {}
+            )
+
+    def archivar(destino: str, imagen: np.ndarray) -> str:
+        """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
+        if destino == _DESTINO_MODELO:
+            ruta = galeria.agregar(imagen)
+            galeria.recargar(preferida=ruta.name)
+            miniaturas.olvidar()
+            _registro.info("nueva foto de modelo en %s", ruta)
+            return f"MODELO AGREGADO: {ruta.stem}"
+        motivo = motivo_para_no_archivar(camara, imagen, cfg, almacen)
+        if motivo is not None:
+            _registro.warning("no se archivo la foto: %s", motivo)
+            return motivo
+        ruta = almacen.guardar(imagen, destino)
+        estado.capturas = almacen.total_guardados
+        refrescar()
+        miniaturas.olvidar()
+        _registro.info("foto archivada en '%s': %s", destino, ruta.name)
+        return f"GUARDADA como {destino}: {ruta.name}"
+
+    estado.botones_guardar = _destinos_rapidos(cfg)
+    if memoria is not None:
+        estado.resumen_memoria = memoria.resumen()
     # Evaluacion en vivo: se clasifica cada N frames, pero el veredicto que se MUESTRA solo
     # cambia cuando varias evaluaciones seguidas coinciden. Sin esa confirmacion el cartel
     # parpadea entre aprobado y rechazado con cada temblor de la mano, y un cartel que
@@ -578,7 +905,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         cv2.namedWindow(_VENTANA, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(_VENTANA, _al_hacer_clic)
         while True:
-            if not estado.congelado:
+            if not estado.congelado and pan is None:
                 frame = camara.leer()
                 if frame is None:
                     nulos_seguidos += 1
@@ -631,17 +958,32 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
 
             a_mostrar = congelado if estado.congelado and congelado is not None else vivo
             referencia = galeria.imagen_actual()
-            # Parecido foto contra foto. Es el veredicto de respaldo mientras no haya
-            # modelo entrenado; con modelo manda el modelo y esto ni se calcula. Cuesta
-            # ~3 ms y el frame dura ~59 ms, pero igual se respeta cada_n_frames: no hay
-            # razon para gastarlo en cada cuadro.
-            if clasificador is None and not estado.esperando_foco:
+            # Quien opina cuando no hay modelo entrenado: primero la MEMORIA, que compara
+            # contra todas las fotos archivadas; si todavia no le alcanza, el parecido
+            # contra la unica foto de modelo que este elegida. Las dos cuestan unos ms y se
+            # respeta cada_n_frames: no hay razon para gastarlo en cada cuadro.
+            if clasificador is None and not estado.esperando_foco and pan is None:
                 if estado.congelado or frames_vistos % cada_n_frames == 0:
+                    estado.juicio = None
+                    if memoria is not None and memoria.lista_para_juzgar(
+                        cfg.memoria.minimo_por_concepto
+                    ):
+                        estado.juicio = memoria.juzgar(
+                            a_mostrar,
+                            parecido_minimo=cfg.memoria.parecido_minimo,
+                            confianza_minima=cfg.memoria.confianza_minima,
+                            minimo_por_concepto=cfg.memoria.minimo_por_concepto,
+                        )
                     estado.parecido = revision.parecido(a_mostrar, referencia)
             estado.referencia_faltante = referencia is None
             estado.nombre_referencia = galeria.nombre_actual
             estado.posicion_referencia = galeria.posicion
-            pantalla = componer(a_mostrar, referencia, cfg, estado)
+
+            if pan is not None:
+                pantalla = panel.componer(pan, alto_lienzo, miniaturas)
+            else:
+                pantalla = componer(a_mostrar, referencia, cfg, estado)
+                alto_lienzo = pantalla.imagen.shape[0]
             cv2.imshow(_VENTANA, pantalla.imagen)
             if not ventana_ajustada:
                 # Recien aca se sabe cuanto mide el lienzo: depende de la resolucion que
@@ -657,6 +999,23 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 if pulsado is not None:
                     accion = pulsado
 
+            # Con el panel abierto las teclas son suyas: adentro se escriben nombres de
+            # conceptos, y ahi la 'q' es una letra, no la orden de salir del programa.
+            if pan is not None:
+                sigue, mensaje = _atender_panel(
+                    accion, tecla, pan, conceptos, galeria, miniaturas,
+                    lambda destino: archivar(destino, pan.pendiente
+                                             if pan.pendiente is not None else a_mostrar),
+                    refrescar,
+                )
+                if mensaje is not None:
+                    estado.mensaje = mensaje
+                    expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+                if not sigue:
+                    pan = None
+                    miniaturas.olvidar()
+                continue
+
             if tecla in (ord("q"), _ESC):
                 accion = "salir"
             elif tecla in (ord(" "), 13):
@@ -667,11 +1026,23 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 accion = "referencia"
             elif tecla == ord("m"):
                 accion = "modelo"
+            elif tecla == ord("c"):
+                accion = "conceptos"
 
             if accion is None:
                 continue
             if accion == "salir":
                 break
+            if accion == "conceptos":
+                pan = panel.EstadoPanel(
+                    conceptos=_lista_para_panel(conceptos, galeria),
+                    pendiente=a_mostrar.copy(),
+                    resumen=estado.resumen_memoria,
+                    aciertos=(
+                        memoria.autoevaluacion().por_concepto if memoria is not None else {}
+                    ),
+                )
+                continue
 
             if accion == "revisar":
                 congelado = vivo.copy()
@@ -694,13 +1065,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             elif accion == "referencia":
                 base = congelado if estado.congelado and congelado is not None else vivo
                 try:
-                    ruta = galeria.agregar(base)
-                    estado.mensaje = f"MODELO AGREGADO: {ruta.stem}"
-                    _registro.info(
-                        "nueva foto de modelo en %s (renombrala con el modelo de sierra "
-                        "para reconocerla despues)",
-                        ruta,
-                    )
+                    estado.mensaje = archivar(_DESTINO_MODELO, base)
                 except OSError as error:
                     _registro.error("no se pudo guardar la foto de modelo: %s", error)
                     estado.mensaje = "ERROR AL GUARDAR - revise el disco"
@@ -716,19 +1081,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             elif accion in cfg.clases:
                 base = congelado if estado.congelado and congelado is not None else vivo
-                motivo = motivo_para_no_archivar(camara, base, cfg, almacen)
-                if motivo is not None:
-                    _registro.warning("no se archivo la foto: %s", motivo)
-                    estado.mensaje = motivo
-                else:
-                    try:
-                        ruta = almacen.guardar(base, accion)
-                        estado.capturas = almacen.total_guardados
-                        estado.conteos = almacen.conteo_por_clase()
-                        estado.mensaje = f"GUARDADA como {accion}: {ruta.name}"
-                    except (OSError, ValueError) as error:
-                        _registro.error("no se pudo guardar: %s", error)
-                        estado.mensaje = "ERROR AL GUARDAR - revise el disco"
+                try:
+                    estado.mensaje = archivar(accion, base)
+                except (OSError, ValueError) as error:
+                    _registro.error("no se pudo guardar: %s", error)
+                    estado.mensaje = "ERROR AL GUARDAR - revise el disco"
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
     except KeyboardInterrupt:
         _registro.info("interrumpido por el operario")

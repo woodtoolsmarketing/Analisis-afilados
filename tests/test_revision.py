@@ -16,6 +16,7 @@ import pytest
 
 from afilado import revision
 from afilado.config import AppConfig
+from afilado.memoria import Juicio, Vecino
 from afilado.tipos import Veredicto
 
 _RAIZ = Path(__file__).resolve().parents[1]
@@ -78,6 +79,8 @@ def test_en_vivo_solo_se_puede_revisar_o_salir(cfg: AppConfig) -> None:
     movida, que es basura para el dataset."""
     pantalla = revision.componer(_imagen(), _imagen(), cfg, revision.EstadoRevision())
 
+    # La pantalla clasica no lleva el boton de CONCEPTOS: el panel se abre igual con la
+    # tecla 'c'. La del taller es la simple, y ahi si esta el boton.
     assert set(pantalla.botones) == {"revisar", "salir"}
 
 
@@ -279,7 +282,7 @@ def test_antes_de_revisar_no_dice_ni_aprobado_ni_desaprobado(cfg: AppConfig) -> 
     assert titulo == "ESPERANDO" and aprobado is None
     assert not _color_pintado(pantalla, revision._VERDE_OK)
     assert not _color_pintado(pantalla, revision._ROJO_NO)
-    assert set(pantalla.botones) == {"revisar", "salir"}
+    assert set(pantalla.botones) == {"revisar", "conceptos", "salir"}
 
 
 @pytest.mark.parametrize("congelado", [False, True])
@@ -494,14 +497,14 @@ def test_sin_modelo_la_pantalla_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# EL CARTEL DE "SIN MODELO" COMO BARRA DE AVANCE. Decir "todavia no hay modelo
-# entrenado" es cierto y a la vez un callejon sin salida: no dice que el modelo
-# lo construye el propio operario juntando fotos, ni cuantas le faltan.
+# EL CARTEL DE "SIN MODELO" COMO ESTADO DE LA MEMORIA. Antes mostraba una meta
+# --"aprobada 12/50"--; el taller pidio que no haya cupo que llenar, sino que el
+# programa aprenda de cada foto. Lo que se informa ahora es que sabe, no cuanto
+# falta para un numero inventado.
 # ---------------------------------------------------------------------------
 
 
 def test_sin_modelo_muestra_cuantas_fotos_van(cfg: AppConfig) -> None:
-    cfg.interfaz.fotos_por_clase_objetivo = 50
     estado = revision.EstadoRevision(
         congelado=True, conteos={"aprobada": 12, "rechazada": 8}
     )
@@ -509,11 +512,24 @@ def test_sin_modelo_muestra_cuantas_fotos_van(cfg: AppConfig) -> None:
     titulo, detalle, _, _ = revision.estado_resultado(estado, cfg)
 
     assert titulo == "SIN MODELO"
-    assert "12/50" in detalle and "8/50" in detalle
+    assert "12" in detalle and "8" in detalle
+
+
+def test_el_cartel_ya_no_muestra_ninguna_meta(cfg: AppConfig) -> None:
+    """Pedido del taller: nada de "12/50". Ni con la clave vieja escrita en el config."""
+    cfg.interfaz.fotos_por_clase_objetivo = 50
+    estado = revision.EstadoRevision(
+        congelado=True, conteos={"aprobada": 12, "rechazada": 8}
+    )
+
+    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert "/50" not in detalle
+    assert "50" not in detalle
 
 
 def test_sin_fotos_el_cartel_dice_que_hacer(cfg: AppConfig) -> None:
-    """Arrancando de cero, un '0/50' solo no explica de donde salen esas fotos."""
+    """Arrancando de cero, un conteo vacio no explica de donde salen esas fotos."""
     estado = revision.EstadoRevision(congelado=True, conteos=None)
 
     _, detalle, _, _ = revision.estado_resultado(estado, cfg)
@@ -521,37 +537,17 @@ def test_sin_fotos_el_cartel_dice_que_hacer(cfg: AppConfig) -> None:
     assert "APROBADA" in detalle and "RECHAZADA" in detalle
 
 
-def test_al_llegar_a_la_meta_avisa_que_se_puede_entrenar(cfg: AppConfig) -> None:
-    cfg.interfaz.fotos_por_clase_objetivo = 50
+def test_manda_el_resumen_de_la_memoria_si_lo_hay(cfg: AppConfig) -> None:
+    """La memoria sabe algo que el conteo de carpetas no: cuanto acierta."""
     estado = revision.EstadoRevision(
-        congelado=True, conteos={"aprobada": 50, "rechazada": 61}
+        congelado=True,
+        conteos={"aprobada": 12, "rechazada": 8},
+        resumen_memoria="memoria: 20 fotos - acierta 17 de 20 que tiene guardadas",
     )
 
     _, detalle, _, _ = revision.estado_resultado(estado, cfg)
 
-    assert "entrenar" in detalle
-
-
-def test_una_clase_corta_todavia_no_esta_lista(cfg: AppConfig) -> None:
-    """Con 80 buenas y 3 malas no se entrena nada: el modelo dice 'buena' siempre."""
-    cfg.interfaz.fotos_por_clase_objetivo = 50
-    estado = revision.EstadoRevision(
-        congelado=True, conteos={"aprobada": 80, "rechazada": 3}
-    )
-
-    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
-
-    assert "entrenar" not in detalle
-    assert "3/50" in detalle
-
-
-def test_sin_meta_configurada_igual_muestra_el_conteo(cfg: AppConfig) -> None:
-    cfg.interfaz.fotos_por_clase_objetivo = 0
-    estado = revision.EstadoRevision(congelado=True, conteos={"aprobada": 7})
-
-    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
-
-    assert "7" in detalle and "/" not in detalle
+    assert "acierta 17 de 20" in detalle
 
 
 def test_el_avance_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
@@ -561,3 +557,144 @@ def test_el_avance_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
     _, _, color, aprobado = revision.estado_resultado(estado, cfg)
 
     assert color == revision._AMBAR and aprobado is None
+
+
+# ---------------------------------------------------------------------------
+# EL VEREDICTO QUE SALE DE LA MEMORIA. Mientras no haya modelo entrenado, quien
+# opina es la memoria de fotos archivadas: compara contra TODAS las que el taller
+# junto, no contra la unica foto de modelo que este elegida. Y cuando no le da
+# para opinar, lo dice: un APROBADO salido de un empate es peor que no decir nada.
+# ---------------------------------------------------------------------------
+
+
+def _juicio(**kwargs) -> Juicio:
+    datos = dict(
+        concepto="aprobada",
+        parecido=0.86,
+        margen=0.12,
+        confianza=0.9,
+        fotos_en_memoria=24,
+        vecinos=[Vecino(concepto="aprobada", archivo="a.jpg", parecido=0.86,
+                        alineado=0.9, bordes=0.82)],
+    )
+    datos.update(kwargs)
+    return Juicio(**datos)
+
+
+def test_la_memoria_aprueba_y_dice_de_donde_sale(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, juicio=_juicio())
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO" and aprobado is True and color == revision._VERDE_OK
+    assert "aprobada" in detalle and "24 fotos guardadas" in detalle
+
+
+def test_la_memoria_desaprueba_si_el_concepto_es_de_rechazo(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, juicio=_juicio(concepto="rechazada"))
+
+    titulo, _, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "DESAPROBADO" and aprobado is False and color == revision._ROJO_NO
+
+
+def test_un_concepto_nuevo_del_taller_tambien_decide(cfg: AppConfig) -> None:
+    """El taller puede crear 'diente_astillado' desde el panel; si lo marco como defecto,
+    la pantalla tiene que pintarse de rojo igual que con 'rechazada'."""
+    cfg.clases = ["aprobada", "rechazada", "diente_astillado"]
+    cfg.clases_defecto = ["rechazada", "diente_astillado"]
+    estado = revision.EstadoRevision(
+        congelado=True, juicio=_juicio(concepto="diente_astillado")
+    )
+
+    titulo, detalle, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "DESAPROBADO" and aprobado is False
+    assert "diente_astillado" in detalle
+
+
+def test_si_la_memoria_no_se_anima_no_se_inventa_un_veredicto(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        congelado=True,
+        juicio=_juicio(concepto=None, motivo="esta muy parejo: aprobada y rechazada"),
+    )
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "NO ESTOY SEGURO"
+    assert aprobado is None and color == revision._AMBAR
+    assert "muy parejo" in detalle
+
+
+def test_sin_vecinos_el_cartel_dice_que_falta_memoria(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        congelado=True,
+        juicio=_juicio(concepto=None, vecinos=[], motivo="la memoria todavia no tiene fotos"),
+    )
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "SIN MEMORIA" and aprobado is None
+
+
+def test_la_memoria_le_gana_al_parecido_contra_una_sola_foto(cfg: AppConfig) -> None:
+    """Treinta fotos archivadas dicen mas que la unica foto de modelo que este elegida."""
+    estado = revision.EstadoRevision(
+        congelado=True, juicio=_juicio(concepto="rechazada"), parecido=0.95
+    )
+
+    titulo, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "DESAPROBADO"
+    assert "foto de modelo" not in detalle
+
+
+def test_el_modelo_entrenado_le_gana_a_la_memoria(cfg: AppConfig) -> None:
+    """El orden es: modelo entrenado, memoria, parecido. La pantalla dice cual fue."""
+    estado = revision.EstadoRevision(
+        congelado=True,
+        veredicto=Veredicto(clase="aprobada", clase_id=0, confianza=0.9,
+                            probabilidades={"aprobada": 0.9, "rechazada": 0.1}),
+        juicio=_juicio(concepto="rechazada"),
+    )
+
+    titulo, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO"
+    assert "modelo entrenado" in detalle
+
+
+def test_la_segunda_linea_dice_cuanto_acierta_y_donde_mirar(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        congelado=True, juicio=_juicio(confianza=0.83, zona="arriba a la derecha")
+    )
+
+    extra = revision.detalle_extra(estado, cfg)
+
+    assert "83%" in extra and "arriba a la derecha" in extra
+
+
+def test_sin_con_que_medir_la_segunda_linea_lo_dice(cfg: AppConfig) -> None:
+    """No se muestra un porcentaje de confianza inventado cuando hay pocas fotos."""
+    estado = revision.EstadoRevision(congelado=True, juicio=_juicio(confianza=None, zona=None))
+
+    extra = revision.detalle_extra(estado, cfg)
+
+    assert "pocas fotos" in extra
+
+
+def test_sin_veredicto_de_la_memoria_no_hay_segunda_linea(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, parecido=0.8)
+
+    assert revision.detalle_extra(estado, cfg) is None
+
+
+def test_la_pantalla_entera_se_arma_con_el_veredicto_de_la_memoria(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        congelado=True, juicio=_juicio(confianza=0.8, zona="en el centro")
+    )
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado, 672)
+
+    assert pantalla.imagen.shape[0] == 672
+    assert _color_pintado(pantalla, revision._VERDE_OK)

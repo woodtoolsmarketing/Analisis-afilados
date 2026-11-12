@@ -473,20 +473,34 @@ mostrar un resultado que ya no describe lo que se ve es peor que no mostrar nada
 Con `evaluar_en_vivo: false` el programa no opina hasta que se aprieta REVISAR. Conviene si
 la camara mira una zona donde pasa gente o herramientas.
 
-#### Que significa ese porcentaje
+#### De donde sale ese porcentaje
 
-La **coincidencia** es cuanta probabilidad le da el modelo a que la pieza sea de las
-aprobadas. Dicho de otra forma: cuanto se parece a las piezas buenas con las que se lo
-entreno. Por encima de `interfaz.umbral_aprobacion` (0,70 de fabrica) sale verde.
+Hay **tres** fuentes posibles, y la pantalla **siempre dice cual fue**, abajo del cartel. Se
+usa la primera que este disponible:
 
-> **No es una comparacion pixel a pixel contra la foto del modelo**, y no conviene que lo
-> sea. Esa comparacion estaria dominada por la luz y el encuadre, no por el estado del filo:
-> dos fotos del mismo diente con distinta iluminacion dan muy distinto, y dos dientes
-> distintos con la misma luz dan casi igual. Seria un numero con cara de dato que no mide
-> nada, que es la peor clase de numero en un control de calidad.
->
-> La foto del modelo esta para que la compare **el ojo del operario**. El porcentaje sale
-> del modelo entrenado.
+| Orden | Quien opina | Que dice el detalle en pantalla |
+|---|---|---|
+| 1 | El **modelo entrenado**, si existe `models/afilado_best.*` | `87% - segun el modelo entrenado` |
+| 2 | La **memoria**: todas las fotos que el taller archivo | `se parece a rechazada (82%) - entre las 24 fotos guardadas` |
+| 3 | El **parecido** contra la foto de modelo que este elegida | `79% - comparando con la foto de modelo` |
+| 4 | Nadie todavia | `SIN MODELO` + lo que la memoria lleva juntado |
+
+Que el origen este SIEMPRE escrito no es un adorno. En este proyecto aparecio un
+**DESAPROBADO 36%** con las dos imagenes practicamente iguales: el numero venia de un modelo
+entrenado con fotos de otra cosa, y mirando la pantalla no habia forma de saberlo. Un
+porcentaje sin su origen es indistinguible de uno inventado.
+
+**Que mide cada uno:**
+
+- **Modelo entrenado:** cuanta probabilidad le da a que la pieza sea de las aprobadas. Es lo
+  mas confiable, cuando existe. Umbral: `interfaz.umbral_aprobacion` (0,70 de fabrica).
+- **Memoria:** cuanto se parece a las fotos ya archivadas, y en que concepto estan esas. Ver
+  mas abajo.
+- **Parecido contra la foto de modelo:** compara las dos imagenes que estan a la vista.
+  Encendido por pedido del taller (`interfaz.veredicto_por_parecido`), con su propio umbral
+  `interfaz.umbral_parecido`. **Ojo con lo que dice:** medido sobre las fotos del taller,
+  dos tomas de la MISMA pieza dan 78% y dos de piezas DISTINTAS dan 79%. O sea que este
+  APROBADO significa "se parece bastante a la foto de al lado", **no** "el filo esta sano".
 
 El umbral de 0,70 es un punto de partida: si pasan piezas que no deberian, subirlo; si frena
 piezas buenas, bajarlo. Conviene tocarlo recien cuando haya un modelo entrenado con fotos del
@@ -496,11 +510,91 @@ microscopio y se vea como se porta.
 |---|---|---|
 | `espacio` | **REVISAR** | Congela lo que se ve y lo juzga. |
 | `espacio` | **OTRA PIEZA** | Vuelve al vivo. |
-| `a` | **GUARDAR BUENA** | Archiva la foto congelada como aprobada. |
-| `r` | **GUARDAR MALA** | Archiva la foto congelada como rechazada. |
+| `a` | **GUARDAR BUENA** | Archiva la foto en el primer concepto sano. |
+| `r` | **GUARDAR MALA** | Archiva la foto en el primer concepto de rechazo. |
+| `c` | **CONCEPTOS** | Abre el panel: elegir a que carpeta va la foto, crear conceptos nuevos, ver y borrar fotos. |
 | `f` | — | **Agrega** lo que se ve como una foto de modelo nueva. |
 | `m` | **OTRO MODELO** | Pasa a la siguiente foto de modelo. |
 | `q` | **SALIR** | Cierra. |
+
+#### La memoria: el programa aprende de cada foto que se archiva
+
+**No hay cupo que llenar.** Cada foto que se guarda en un concepto se suma AL INSTANTE a lo
+que el programa compara, y el veredicto de la foto siguiente ya la tiene en cuenta. No hay
+que juntar cincuenta y entrenar: eso sigue existiendo, y es mejor, pero es para despues.
+
+Lo que la memoria hace es preguntarle a las fotos guardadas: *cuales se parecen mas a esta, y
+en que concepto estan archivadas esas*. Dos cosas importantes salen de que sea comparacion y
+no una red: se puede explicar foto por foto, y no inventa nada que no este guardado.
+
+**La memoria se mide a si misma.** Esconde cada foto guardada y le pregunta a las demas en
+que concepto va. De ahi sale el `acierta 21 de 24` que aparece en pantalla y en el panel. Es
+el unico numero honesto sobre cuanta precision tiene esto: sale de las fotos de ESTE taller y
+sube (o baja) con cada foto que entra.
+
+**Y cuando no esta segura, lo dice.** En vez de un umbral inventado, mira que paso de verdad
+en los casos igual de ajustados: si de las doce veces que estuvo asi de parejo acerto seis,
+la confianza es 50% y el cartel dice **NO ESTOY SEGURO** con el motivo. Un APROBADO salido de
+un empate es peor que no decir nada, porque el operario no tiene como saber que fue un empate.
+
+Tampoco fuerza un concepto si la foto no se parece a nada de lo guardado: ahi dice
+`esta foto no se parece a ninguna de las N guardadas`.
+
+Ademas del porcentaje, cuando la diferencia esta **en un lugar** y no repartida por toda la
+imagen, lo dice: *la mayor diferencia esta arriba a la derecha*.
+
+**Para que empiece a opinar** hacen falta `memoria.minimo_por_concepto` fotos (3 de fabrica)
+en al menos **dos** conceptos distintos. Con uno solo no hay decision posible: todo se parece
+a lo unico que hay.
+
+**Se corrige sola, archivando.** Si la memoria dice "aprobada" y era mala, se aprieta GUARDAR
+MALA: esa foto entra al concepto correcto y la proxima vez pesa. Eso es todo el
+entrenamiento que hay que hacer en el dia a dia.
+
+Cuesta poco: medido con 300 fotos en la PC del taller, el veredicto sale en **6,9 ms** --el
+mismo tiempo que con 19 fotos, porque primero descarta barato y solo compara en serio las
+mejores candidatas de cada concepto-- y abrir el programa con todas esas fotos ya analizadas
+tarda 51 ms. La cache vive en `data/memoria/` y se puede borrar sin perder nada: se rehace
+sola leyendo las fotos.
+
+#### El panel de CONCEPTOS (tecla `c`)
+
+Un **concepto** es una carpeta de fotos que significan lo mismo: `aprobada`, `rechazada`,
+`diente_astillado`, `filo_quemado`. Los decide el taller, no el config.
+
+```
+  CONCEPTOS
+  memoria: 24 fotos (aprobada 14  rechazada 10)  -  acierta 21 de 24
+
+  [ ] 1  foto de modelo      19 fotos  -  es la foto con la que se compara, no un concepto
+  (o) 2  aprobada            14 fotos  -  la memoria acierta 12 de 14
+  (o) 3  rechazada           10 fotos  -  la memoria acierta 9 de 10
+  (o) 4  filo_quemado        sin fotos todavia
+
+  [GUARDAR ACA] [NUEVO CONCEPTO] [VER FOTOS] [BORRAR CONCEPTO]        [VOLVER]
+```
+
+- **A que carpeta va esta foto**: se elige la fila (con el mouse o con las teclas `1`..`9`) y
+  se aprieta **GUARDAR ACA** o `ENTER`. A la derecha se ve la foto que se esta por archivar.
+- **Crear un concepto**: **NUEVO CONCEPTO** o `n`, se escribe el nombre y `ENTER`. Queda
+  creada la carpeta y se puede usar en el acto, sin cerrar el programa.
+- **Ver y tirar fotos**: **VER FOTOS** o `v` muestra las del concepto elegido; `b` manda la
+  elegida a la papelera. Sirve para sacar la foto movida o la que quedo en la carpeta
+  equivocada.
+- **Borrar un concepto**: **BORRAR CONCEPTO** o `b`, con confirmacion.
+
+> **Borrar no borra.** Todo lo que se saca --una foto o un concepto entero-- va a
+> `data/coleccion/_papelera/`. Un clic de mas no puede costar las fotos que el taller tardo
+> semanas en juntar. El que quiera el espacio, vacia esa carpeta con el Explorador viendo lo
+> que tira.
+
+**Los conceptos SON las carpetas de `data/coleccion/`.** Una carpeta copiada ahi con el
+Explorador aparece sola la proxima vez que se abre el programa; una borrada deja de estar. El
+`conceptos.json` que esta al lado no manda: solo recuerda cual cuenta como defecto (los que
+pintan el cartel de rojo) y en que orden se muestran.
+
+La galeria de fotos de modelo aparece en la misma lista, aunque no sea un concepto: es otra
+carpeta a la que van fotos, y la pregunta del operario es "a donde mando esta foto".
 
 #### Las fotos de modelo
 
@@ -587,13 +681,18 @@ veredicto se enciende solo cuando aparece `models/afilado_best.pt`.
 Ciclo para mejorar el modelo:
 
 ```bash
-# tras varias sesiones juntando fotos en data/coleccion/, se reentrena combinando
-# las tandas originales con lo recolectado (el mismo nombre de clase se junta):
-python scripts/construir_clasificacion.py \
-    --clase aprobada  "ruta/tanda_buenas"  --clase aprobada  data/coleccion/aprobada \
-    --clase rechazada "ruta/tanda_malas"   --clase rechazada data/coleccion/rechazada --forzar
+# tras varias sesiones juntando fotos, se reentrena con TODOS los conceptos que haya,
+# con los nombres que el taller les puso desde el panel (_papelera queda afuera):
+python scripts/construir_clasificacion.py --coleccion data/coleccion --forzar
 python -m afilado.cli.train --datos data/clasificacion --epocas 100
+
+# y si hay tandas sueltas en otro lado, se suman a mano (se pueden mezclar las dos formas):
+python scripts/construir_clasificacion.py --coleccion data/coleccion --clase aprobada "ruta/tanda_buenas" --clase rechazada "ruta/tanda_malas" --forzar
 ```
+
+> Conviene `--coleccion` antes que escribir los `--clase` a mano: el error que mas caro sale
+> es entrenar sin una clase porque alguien se olvido de ponerla en la linea de comandos, y
+> que el modelo nunca pueda decirla.
 
 ### 5.2 Modo deteccion/medicion (`tarea: detect` o `segment`)
 

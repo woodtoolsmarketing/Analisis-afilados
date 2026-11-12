@@ -389,6 +389,19 @@ class AlmacenClasificacion:
     def total_guardados(self) -> int:
         return self._guardados
 
+    @property
+    def clases(self) -> list[str]:
+        return list(self._clases)
+
+    @clases.setter
+    def clases(self, valores: list[str]) -> None:
+        """La lista de clases cambia EN CALIENTE: el operario crea conceptos sin reiniciar.
+
+        Sin esto, un concepto creado desde el panel seria rechazado por guardar() con
+        "clase desconocida" hasta cerrar y volver a abrir el programa.
+        """
+        self._clases = [str(v) for v in valores]
+
     def conteo_por_clase(self) -> dict[str, int]:
         """Cuantas fotos hay EN DISCO de cada clase, contando las de sesiones anteriores.
 
