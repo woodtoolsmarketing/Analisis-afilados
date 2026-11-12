@@ -25,6 +25,7 @@ import pytest
 from afilado import panel
 from afilado.cli import run_live
 from afilado.conceptos import Concepto, Conceptos
+from afilado.ordenes import Orden, Ordenes
 
 _ESC = 27
 _ENTER = 13
@@ -181,7 +182,8 @@ def test_una_foto_ilegible_no_rompe_la_grilla(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _manejar(pan, conceptos, galeria, accion=None, tecla=255, archivadas=None):
+def _manejar(pan, conceptos, galeria, accion=None, tecla=255, archivadas=None,
+             ordenes=None):
     minis = panel.Miniaturas()
 
     def archivar(destino: str) -> str:
@@ -198,7 +200,8 @@ def _manejar(pan, conceptos, galeria, accion=None, tecla=255, archivadas=None):
         )
 
     return run_live._atender_panel(
-        accion, tecla, pan, conceptos, galeria, minis, archivar, refrescar
+        accion, tecla, pan, conceptos, galeria, minis, archivar, refrescar,
+        ordenes if ordenes is not None else Ordenes(str(conceptos.carpeta / "_ordenes")),
     )
 
 
@@ -521,3 +524,139 @@ def test_la_galeria_de_modelos_no_se_puede_marcar(taller) -> None:
 
     assert pan.aviso
     assert conceptos.defectos() == []
+
+
+# ---------------------------------------------------------------------------
+# La orden de afilado: cargarla a mano y contar diente por diente
+# ---------------------------------------------------------------------------
+
+
+def test_la_pantalla_de_la_orden_pide_los_datos(taller) -> None:
+    conceptos, galeria = taller
+    estado = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, cargando_orden=True)
+
+    pantalla = panel.componer(estado, _ALTO)
+
+    assert {"campo:0", "campo:4", "crear_orden", "volver_orden"} <= set(pantalla.botones)
+
+
+def test_cargar_una_orden_a_mano(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, cargando_orden=True)
+
+    for texto, campo in (("1234", 0), ("NP-998", 1), ("Carpinteria", 2),
+                         ("3", 3), ("24", 4)):
+        pan.campo = campo
+        for letra in texto:
+            _manejar(pan, conceptos, galeria, tecla=ord(letra), ordenes=ordenes)
+    sigue, mensaje = _manejar(pan, conceptos, galeria, accion="crear_orden", ordenes=ordenes)
+
+    assert sigue is True
+    assert "1234" in (mensaje or "")
+    assert ordenes.abierta is not None
+    assert len(ordenes.abierta.sierras) == 3
+    assert ordenes.abierta.sierras[0].dientes == 24
+    assert ordenes.abierta.nota_pedido == "NP-998"
+
+
+def test_en_cuantas_sierras_no_entran_letras(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, cargando_orden=True, campo=3)
+
+    _manejar(pan, conceptos, galeria, tecla=ord("x"), ordenes=ordenes)
+
+    assert pan.valores[3] == ""
+    assert "numero" in (pan.aviso or "")
+
+
+def test_una_orden_sin_numero_no_se_crea(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, cargando_orden=True)
+    pan.valores = ["", "", "", "2", "10"]
+
+    _manejar(pan, conceptos, galeria, accion="crear_orden", ordenes=ordenes)
+
+    assert ordenes.abierta is None
+    assert pan.aviso
+
+
+def test_no_se_pisa_una_orden_que_ya_existe(taller, tmp_path: Path) -> None:
+    """El numero de orden es la identidad del informe: si se pisa, se pierde el anterior."""
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    ordenes.abrir(Orden.nueva("1234", 1, 5))
+    ordenes.cerrar()
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, cargando_orden=True)
+    pan.valores = ["1234", "", "", "2", "10"]
+
+    _manejar(pan, conceptos, galeria, accion="crear_orden", ordenes=ordenes)
+
+    assert "ya hay una orden" in (pan.aviso or "")
+    assert ordenes.abierta is None
+
+
+def test_la_pantalla_de_la_orden_abierta_muestra_el_avance(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    orden = Orden.nueva("1234", 2, 6)
+    orden.anotar(estado="afilado", aprobado=True)
+    estado = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, orden=orden)
+
+    pantalla = panel.componer(estado, _ALTO)
+
+    assert {"siguiente_sierra", "saltear_diente", "informe", "cerrar_orden"} <= set(
+        pantalla.botones
+    )
+
+
+def test_saltear_un_diente_desde_la_pantalla(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    orden = ordenes.abrir(Orden.nueva("1234", 1, 4))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, orden=orden)
+
+    _, mensaje = _manejar(pan, conceptos, galeria, tecla=ord("x"), ordenes=ordenes)
+
+    assert "DIENTE 1" in (mensaje or "")
+    assert orden.diente().numero == 2
+    # Y quedo guardado en disco, no solo en memoria.
+    assert Ordenes(str(tmp_path / "ordenes")).abierta.total_revisados == 1
+
+
+def test_el_informe_se_guarda_desde_la_pantalla(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    orden = ordenes.abrir(Orden.nueva("1234", 1, 2))
+    orden.anotar(estado="roto", aprobado=False)
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, orden=orden)
+
+    _, mensaje = _manejar(pan, conceptos, galeria, accion="informe", ordenes=ordenes)
+
+    assert "informe_1234" in (mensaje or "")
+    assert (tmp_path / "ordenes" / "informe_1234.txt").is_file()
+    assert (tmp_path / "ordenes" / "informe_1234.csv").is_file()
+
+
+def test_cerrar_la_orden_deja_el_informe_escrito(taller, tmp_path: Path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    orden = ordenes.abrir(Orden.nueva("1234", 1, 2))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, orden=orden)
+
+    _manejar(pan, conceptos, galeria, accion="cerrar_orden", ordenes=ordenes)
+
+    assert ordenes.abierta is None
+    assert (tmp_path / "ordenes" / "informe_1234.txt").is_file()
+
+
+def test_de_la_orden_se_vuelve_a_los_conceptos_sin_cerrar_el_panel(taller, tmp_path) -> None:
+    conceptos, galeria = taller
+    ordenes = Ordenes(str(tmp_path / "ordenes"))
+    orden = ordenes.abrir(Orden.nueva("1234", 1, 2))
+    pan = _estado(conceptos, galeria, modo=panel.MODO_ORDEN, orden=orden)
+
+    sigue, _ = _manejar(pan, conceptos, galeria, tecla=_ESC, ordenes=ordenes)
+
+    assert sigue is True and pan.modo == panel.MODO_LISTA

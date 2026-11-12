@@ -513,6 +513,7 @@ microscopio y se vea como se porta.
 | `a` | **GUARDAR BUENA** | Archiva la foto en el primer concepto sano. |
 | `r` | **GUARDAR MALA** | Archiva la foto en el primer concepto de rechazo. |
 | `c` | **CONCEPTOS** | Abre el panel: elegir a que carpeta va la foto, crear conceptos nuevos, ver y borrar fotos. |
+| `o` | — | Abre la **orden de afilado**: cargarla, ver en que diente va, sacar el informe. |
 | `f` | — | **Agrega** lo que se ve como una foto de modelo nueva. |
 | `m` | **OTRO MODELO** | Pasa a la siguiente foto de modelo. |
 | `q` | **SALIR** | Cierra. |
@@ -620,6 +621,42 @@ pintan el cartel de rojo) y en que orden se muestran.
 
 La galeria de fotos de modelo aparece en la misma lista, aunque no sea un concepto: es otra
 carpeta a la que van fotos, y la pregunta del operario es "a donde mando esta foto".
+
+#### La ORDEN DE AFILADO y su informe (tecla `o`)
+
+Sirve para una cosa concreta: **cuando llega un reclamo**, poder contestar que se vio en
+cada diente de esa sierra, con fecha y hora.
+
+```
+  ORDEN DE AFILADO
+  ORDEN OA-1234   -   sierra 1 de 3   -   diente 15 de 24
+
+  Nota de pedido:  NP-998          Sierras:  3  -  dientes en total: 72
+  Cliente:  Maderera San Jose      Revisados:  14 de 72  -  para rechazar: 2
+
+  SIERRA 1:  14 de 24 dientes revisados  -  2 para rechazar
+  [] [] [] [] [X] [] [] [] [] [X] [] [?] [] []  . . . . . . . . . .
+   verde = aprobado    X rojo = rechazado    ? ambar = no se pudo decidir    gris = falta
+
+  [SIGUIENTE SIERRA] [SALTEAR DIENTE] [GUARDAR INFORME] [ORDEN NUEVA] [CERRAR ORDEN]
+```
+
+- **Los datos se cargan a mano**: numero de orden, nota de pedido, cliente, cuantas sierras
+  y cuantos dientes tiene cada una. La idea es que vengan de la app de afilados, pero eso
+  **todavia no esta conectado**: conectarlo a medias seria peor que nada, porque un numero
+  de orden equivocado en un informe de reclamo es peor que no tener informe. El dia que se
+  conecte, lo unico que cambia es de donde salen los mismos campos.
+- **Cada diente que archivas queda anotado** y el contador avanza solo: arriba de la
+  pantalla del taller se ve siempre `sierra 1 de 3 - diente 15 de 24`. Lo que vale como
+  estado es **donde lo archivaste vos**; lo que opinaba el programa queda anotado al lado.
+- **Un diente que no se pudo mirar se saltea** y figura como tal. Que falte uno es un dato,
+  no un hueco.
+- **GUARDAR INFORME** deja dos archivos en `data/ordenes/`: `informe_OA-1234.txt` para
+  imprimir o mandar, y `informe_OA-1234.csv` para abrir en Excel, con **una fila por
+  diente**. Al cerrar la orden se escriben solos.
+- Se guarda **despues de cada diente**, no al final: un corte de luz a mitad de una sierra
+  no puede borrar dos horas de trabajo. Y si cerras el programa, al abrirlo retoma la orden
+  donde estaba.
 
 #### Las fotos de modelo
 

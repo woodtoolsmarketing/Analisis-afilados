@@ -28,6 +28,7 @@ import numpy as np
 
 from . import tipografia
 from .conceptos import Concepto
+from .ordenes import Orden
 # Se importan los trazos de la pantalla principal --no se copian-- para que el panel y la
 # pantalla del taller sean el mismo programa a la vista: mismos colores, mismas esquinas.
 from .revision import (
@@ -55,6 +56,18 @@ MODO_LISTA = "lista"
 MODO_NUEVO = "nuevo"
 MODO_FOTOS = "fotos"
 MODO_BORRAR = "borrar"
+MODO_ORDEN = "orden"
+
+# Los datos de la orden de afilado, en el orden en que se teclean. El tipo dice que teclas
+# se aceptan: en "cuantas sierras" una letra no es un error de dedo, es un dato que despues
+# rompe el informe.
+CAMPOS_ORDEN: tuple[tuple[str, str], ...] = (
+    ("Orden de afilado", "texto"),
+    ("Nota de pedido", "texto"),
+    ("Cliente", "texto"),
+    ("Cuantas sierras", "numero"),
+    ("Dientes por sierra", "numero"),
+)
 
 _MARGEN = 18
 _ALTO_FILA = 56
@@ -84,6 +97,11 @@ class EstadoPanel:
     fotos: list[Path] = field(default_factory=list)
     pagina: int = 0
     foto_elegida: int = 0
+    # Modo orden: la orden abierta (si hay), y los datos que se estan tecleando.
+    orden: Optional[Orden] = None
+    cargando_orden: bool = False
+    valores: list[str] = field(default_factory=lambda: ["" for _ in CAMPOS_ORDEN])
+    campo: int = 0
 
     @property
     def concepto_elegido(self) -> Optional[Concepto]:
@@ -169,7 +187,9 @@ def componer(
     botones: dict[str, Rect] = {}
     etiquetas: list[tuple[str, Rect, tuple]] = []
 
-    if estado.modo == MODO_FOTOS:
+    if estado.modo == MODO_ORDEN:
+        lineas = _dibujar_orden(lienzo, estado, botones, etiquetas)
+    elif estado.modo == MODO_FOTOS:
         lineas = _dibujar_fotos(lienzo, estado, botones, etiquetas, miniaturas)
     elif estado.modo == MODO_BORRAR:
         lineas = _dibujar_borrar(lienzo, estado, botones, etiquetas)
@@ -324,7 +344,7 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
     # Todo lo que hay en los botones tiene tecla, y la tecla se dice. En el taller el
     # mouse esta siempre con aserrin y el operario termina usando el teclado.
     teclas = ("teclas:   1-9 elegir   ENTER guardar aca   n nuevo   d bueno/malo   "
-              "v ver fotos   b borrar   ESC volver")
+              "v ver fotos   b borrar   o orden   ESC volver")
     if hay_mas:
         teclas += f"   |   {estado.elegido + 1} de {len(estado.conceptos)}, w y s para moverse"
     lineas.append((teclas, (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False))
@@ -336,6 +356,7 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
         ("nuevo", "NUEVO CONCEPTO", _AZUL),
         ("fotos", "VER FOTOS", _SUPERFICIE),
         ("borrar", "BORRAR CONCEPTO", _SUPERFICIE),
+        ("orden", "ORDEN DE AFILADO", _SUPERFICIE),
         ("volver", "VOLVER", _SUPERFICIE),
     ]
     _fila_de_botones(lienzo, alto, definiciones, botones, etiquetas)
@@ -393,6 +414,114 @@ def _dibujar_borrar(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list)
         lienzo, alto,
         [("confirmar_borrado", "SI, BORRAR", _ROJO_NO),
          ("volver_lista", "NO, DEJALO", _SUPERFICIE)],
+        botones, etiquetas,
+    )
+    return lineas
+
+
+def _dibujar_orden(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) -> list:
+    """La orden de afilado: el formulario para cargarla, o el avance si ya esta abierta."""
+    alto = lienzo.shape[0]
+    lineas: list = []
+
+    if estado.orden is None or estado.cargando_orden:
+        _cabecera(
+            "ORDEN DE AFILADO",
+            "escribi cada dato y apreta ENTER para pasar al siguiente. ESC para dejarlo.",
+            lineas,
+        )
+        y = _ALTO_CABECERA + 6
+        for indice, (etiqueta, tipo) in enumerate(CAMPOS_ORDEN):
+            activo = indice == estado.campo
+            _tarjeta(lienzo, (_MARGEN, y), (ANCHO_LIENZO - _MARGEN, y + 54),
+                     _BORDE if activo else _SUPERFICIE, 10)
+            if activo:
+                _rect_redondeado(lienzo, (_MARGEN, y), (ANCHO_LIENZO - _MARGEN, y + 54),
+                                 _AZUL, 10, 2)
+            valor = estado.valores[indice] if indice < len(estado.valores) else ""
+            lineas.append((etiqueta, (_MARGEN + 22, y + 16), _TEXTO_TENUE, 20, False))
+            lineas.append((valor + ("_" if activo else ""),
+                           (_MARGEN + 330, y + 12), _TEXTO, 26, True))
+            if tipo == "numero" and not valor:
+                lineas.append(("(un numero)", (_MARGEN + 330, y + 18), _TEXTO_TENUE, 17, False))
+            botones[f"campo:{indice}"] = (_MARGEN, y, ANCHO_LIENZO - _MARGEN, y + 54)
+            y += 60
+
+        if estado.aviso:
+            lineas.append((estado.aviso, (_MARGEN + 4, y + 10), _AMBAR, 20, True))
+        else:
+            lineas.append((
+                "Estos datos hoy se cargan a mano. Van tal cual al informe que se imprime "
+                "si hay un reclamo.",
+                (_MARGEN + 4, y + 10), _TEXTO_TENUE, 18, False,
+            ))
+        _fila_de_botones(
+            lienzo, alto,
+            [("crear_orden", "EMPEZAR LA ORDEN", _VERDE_OK),
+             ("volver_orden", "CANCELAR", _SUPERFICIE)],
+            botones, etiquetas,
+        )
+        return lineas
+
+    orden = estado.orden
+    sierra = orden.sierra()
+    _cabecera("ORDEN DE AFILADO", orden.resumen(), lineas)
+
+    y = _ALTO_CABECERA + 6
+    _tarjeta(lienzo, (_MARGEN, y), (ANCHO_LIENZO - _MARGEN, y + 190), _SUPERFICIE, 14)
+    datos = [
+        f"Nota de pedido:  {orden.nota_pedido or '-'}",
+        f"Cliente:  {orden.cliente or '-'}",
+        f"Abierta:  {orden.abierta}",
+        f"Sierras:  {len(orden.sierras)}   -   dientes en total: {orden.total_dientes}",
+        f"Revisados:  {orden.total_revisados} de {orden.total_dientes}"
+        f"   -   para rechazar: {orden.total_rechazados}",
+    ]
+    for indice, texto in enumerate(datos):
+        lineas.append((texto, (_MARGEN + 24, y + 16 + indice * 34), _TEXTO, 20, False))
+
+    y += 210
+    if sierra is not None:
+        lineas.append((
+            f"SIERRA {sierra.numero}:  {sierra.cuantos_revisados} de {sierra.dientes} "
+            f"dientes revisados   -   {sierra.rechazados} para rechazar",
+            (_MARGEN + 4, y), _TEXTO_TENUE, 20, True,
+        ))
+        # Una barra por diente: de un vistazo se ve cuanto falta y donde estan los malos.
+        y += 34
+        ancho = ANCHO_LIENZO - 2 * _MARGEN
+        paso = max(3, min(26, ancho // max(1, sierra.dientes)))
+        for indice, diente in enumerate(sierra.revisados):
+            x = _MARGEN + indice * paso
+            if x + paso - 2 > ANCHO_LIENZO - _MARGEN:
+                break
+            if not diente.revisado:
+                color = _BORDE
+            elif diente.aprobado is True:
+                color = _VERDE_OK
+            elif diente.aprobado is False:
+                color = _ROJO_NO
+            else:
+                color = _AMBAR
+            cv2.rectangle(lienzo, (x, y), (x + paso - 3, y + 26), color, -1, cv2.LINE_AA)
+
+    if estado.aviso:
+        lineas.append((estado.aviso, (_MARGEN + 4, alto - _ALTO_BOTONES - 48),
+                       _AMBAR, 20, True))
+    lineas.append((
+        "teclas:   s siguiente sierra   x saltear este diente   i informe   "
+        "n orden nueva   ESC volver",
+        (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False,
+    ))
+
+    _fila_de_botones(
+        lienzo, alto,
+        [("siguiente_sierra", "SIGUIENTE SIERRA", _SUPERFICIE),
+         ("saltear_diente", "SALTEAR DIENTE", _SUPERFICIE),
+         ("informe", "GUARDAR INFORME", _AZUL),
+         ("nueva_orden", "ORDEN NUEVA", _SUPERFICIE),
+         ("cerrar_orden", "CERRAR ORDEN", _ROJO_NO),
+         ("volver_orden", "VOLVER", _SUPERFICIE)],
         botones, etiquetas,
     )
     return lineas

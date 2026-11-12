@@ -85,10 +85,12 @@ def _correr(teclas: list[int], monkeypatch: pytest.MonkeyPatch) -> int:
     pendientes = list(teclas)
 
     def _waitKey(_espera: int = 0) -> int:
-        # Al terminar el guion se sale SIEMPRE: sin esto, una prueba que no llegue a la
-        # 'q' deja el bucle girando para siempre y lo unico que se ve es que pytest se
-        # colgo. Ya paso.
-        return pendientes.pop(0) if pendientes else ord("q")
+        # Al terminar el guion se manda ESC, que SIEMPRE escala un nivel --de un
+        # formulario a su pantalla, de una pantalla al panel, del panel al programa-- y
+        # termina cerrando. Con 'q' no alcanzaba: adentro del formulario de la orden la
+        # 'q' es una letra, asi que la prueba se quedaba tecleando "qqqq..." para siempre
+        # y lo unico que se veia era que pytest se habia colgado. Ya paso dos veces.
+        return pendientes.pop(0) if pendientes else _ESC
 
     monkeypatch.setattr(cv2, "waitKey", _waitKey)
 
@@ -223,3 +225,85 @@ def test_con_la_camara_congelada_no_entra_ni_una_foto_de_modelo(
 
     assert not list((taller / "data" / "referencia").rglob("*.jpg"))
     assert _fotos(taller, "aprobada") == []
+
+
+# ---------------------------------------------------------------------------
+# La orden de afilado, de punta a punta
+# ---------------------------------------------------------------------------
+
+
+def _ordenes(base: Path):
+    from afilado.ordenes import Ordenes
+    return Ordenes(str(base / "data" / "ordenes"))
+
+
+def test_archivar_un_diente_lo_anota_en_la_orden(taller: Path, monkeypatch) -> None:
+    """Es lo que convierte una pila de fotos sueltas en 'la sierra 1, diente 3 de 24'."""
+    from afilado.ordenes import Orden, Ordenes
+
+    ordenes = Ordenes(str(taller / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva("1234", 1, 4, nota_pedido="NP-1", cliente="Taller"))
+
+    _correr([_ESPACIO, ord("a"), ord(" "), ord("a"), ord("q")], monkeypatch)
+
+    guardada = _ordenes(taller).abierta
+    assert guardada is not None
+    assert guardada.total_revisados == 2
+    primero = guardada.sierras[0].revisados[0]
+    assert primero.estado == "aprobada" and primero.aprobado is True
+    assert primero.foto.endswith(".jpg")
+    assert "operario" in primero.origen
+
+
+def test_el_informe_sale_con_lo_que_se_archivo(taller: Path, monkeypatch) -> None:
+    from afilado.ordenes import Orden, Ordenes
+
+    ordenes = Ordenes(str(taller / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva("1234", 1, 3))
+
+    # Se archiva un diente bueno y uno malo, y despues se pide el informe desde el panel.
+    _correr([_ESPACIO, ord("a"), ord(" "), ord("r"), ord("o"), ord("i"), ord("q")],
+            monkeypatch)
+
+    informe = (taller / "data" / "ordenes" / "informe_1234.txt").read_text(encoding="utf-8")
+    assert "APROBADO" in informe and "RECHAZADO" in informe
+    assert "(sin revisar)" in informe          # el tercero no se reviso y se dice
+    assert (taller / "data" / "ordenes" / "informe_1234.csv").is_file()
+
+
+def test_la_orden_se_carga_a_mano_desde_el_programa(taller: Path, monkeypatch) -> None:
+    teclas = [ord("o")]
+    teclas += [ord(c) for c in "77"] + [_ENTER]        # orden
+    teclas += [ord(c) for c in "NP9"] + [_ENTER]       # nota de pedido
+    teclas += [_ENTER]                                  # cliente vacio
+    teclas += [ord("2"), _ENTER]                        # sierras
+    teclas += [ord("5"), _ENTER]                        # dientes (ultimo ENTER = crear)
+    teclas += [ord("q")]
+
+    _correr(teclas, monkeypatch)
+
+    abierta = _ordenes(taller).abierta
+    assert abierta is not None
+    assert abierta.numero == "77" and abierta.nota_pedido == "NP9"
+    assert len(abierta.sierras) == 2 and abierta.sierras[0].dientes == 5
+
+
+def test_al_abrir_el_programa_se_retoma_la_orden(taller: Path, monkeypatch) -> None:
+    """El taller corta a mitad de una sierra para atender el mostrador."""
+    from afilado.ordenes import Orden, Ordenes
+
+    ordenes = Ordenes(str(taller / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva("1234", 1, 4))
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    assert _ordenes(taller).abierta.total_revisados == 2
+
+
+def test_sin_orden_abierta_todo_sigue_funcionando(taller: Path, monkeypatch) -> None:
+    """La orden es opcional: el que solo quiere mirar una sierra no tiene que cargar nada."""
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    assert len(_fotos(taller, "aprobada")) == 1
+    assert _ordenes(taller).abierta is None

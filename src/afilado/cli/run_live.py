@@ -50,6 +50,7 @@ from ..conceptos import (
 from ..config import AppConfig, cargar_config, raiz_repo, ruta_absoluta
 from ..detector import crear_clasificador
 from ..memoria import Memoria
+from ..ordenes import Orden, Ordenes
 from ..pipeline import Pipeline
 from ..tipos import ResultadoFrame, Veredicto
 
@@ -63,6 +64,9 @@ _DIR_COLECCION = "data/coleccion"
 # no estuviera en la misma lista, el panel contestaria a medias la pregunta "a donde va
 # esta foto".
 _DESTINO_MODELO = "foto de modelo"
+
+# Donde quedan las ordenes de afilado y sus informes, al lado del programa.
+_DIR_ORDENES = "data/ordenes"
 
 # Donde queda el registro de lo que paso. Abierto con doble clic NO hay consola --esa es
 # justamente la idea-- asi que si el log solo fuera a pantalla se perderia entero, y es lo
@@ -352,6 +356,7 @@ def _atender_panel(
     miniaturas: panel.Miniaturas,
     archivar,
     refrescar,
+    ordenes,
 ) -> tuple[bool, Optional[str]]:
     """Resuelve una tecla o un clic del panel. Devuelve (sigue_abierto, mensaje).
 
@@ -362,9 +367,104 @@ def _atender_panel(
         return _panel_nuevo(accion, tecla, pan, conceptos, refrescar)
     if pan.modo == panel.MODO_BORRAR:
         return _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar)
+    if pan.modo == panel.MODO_ORDEN:
+        return _panel_orden(accion, tecla, pan, ordenes)
     if pan.modo == panel.MODO_FOTOS:
         return _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar)
     return _panel_lista(accion, tecla, pan, conceptos, galeria, miniaturas, archivar, refrescar)
+
+
+def _panel_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
+    """La orden de afilado: cargarla a mano, ver el avance, sacar el informe."""
+    cargando = pan.orden is None or pan.cargando_orden
+
+    # La 'q' vuelve igual que ESC, pero SOLO con la orden ya cargada: adentro del
+    # formulario es una letra mas --hay clientes que se llaman "Quiroga"-- y ahi la unica
+    # salida es ESC, que es lo que dice la pantalla.
+    if accion == "volver_orden" or tecla == _ESC or (tecla == ord("q") and not cargando):
+        if cargando and pan.orden is not None:
+            pan.cargando_orden, pan.aviso = False, None    # vuelve al avance
+            return True, None
+        pan.modo, pan.cargando_orden, pan.aviso = panel.MODO_LISTA, False, None
+        return True, None
+
+    if cargando:
+        return _cargar_orden(accion, tecla, pan, ordenes)
+
+    orden = pan.orden
+    if accion == "nueva_orden" or tecla == ord("n"):
+        pan.cargando_orden = True
+        pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
+        pan.campo, pan.aviso = 0, None
+    elif accion == "siguiente_sierra" or tecla == ord("s"):
+        numero = orden.siguiente_sierra()
+        ordenes.guardar()
+        return True, f"SIERRA {numero} de {len(orden.sierras)}"
+    elif accion == "saltear_diente" or tecla == ord("x"):
+        diente = orden.saltear()
+        ordenes.guardar()
+        if diente is None:
+            pan.aviso = "esta sierra ya tiene todos los dientes revisados"
+            return True, None
+        return True, f"DIENTE {diente.numero} SALTEADO"
+    elif accion == "informe" or tecla == ord("i"):
+        texto, _ = ordenes.escribir_informe()
+        if texto is None:
+            pan.aviso = "no se pudo escribir el informe; revise el disco"
+            return True, None
+        return True, f"INFORME EN {texto.name}"
+    elif accion == "cerrar_orden":
+        numero = orden.numero
+        ordenes.escribir_informe()
+        ordenes.cerrar()
+        pan.orden = None
+        return True, f"ORDEN {numero} CERRADA - el informe quedo guardado"
+    return True, None
+
+
+def _cargar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
+    """El formulario. Un campo por vez, ENTER pasa al siguiente."""
+    if accion is not None and accion.startswith("campo:"):
+        pan.campo = int(accion.split(":", 1)[1])
+        pan.aviso = None
+        return True, None
+
+    if accion == "crear_orden" or (tecla == 13 and pan.campo >= len(panel.CAMPOS_ORDEN) - 1):
+        valores = [v.strip() for v in pan.valores]
+        try:
+            orden = Orden.nueva(
+                numero=valores[0],
+                cantidad_sierras=int(valores[3] or 0),
+                dientes_por_sierra=int(valores[4] or 0),
+                nota_pedido=valores[1],
+                cliente=valores[2],
+            )
+        except ValueError as error:
+            pan.aviso = str(error)
+            return True, None
+        if ordenes.cargar(orden.numero) is not None:
+            pan.aviso = f"ya hay una orden {orden.numero} guardada; usa otro numero"
+            return True, None
+        ordenes.abrir(orden)
+        pan.orden, pan.cargando_orden, pan.aviso = orden, False, None
+        return True, f"ORDEN {orden.numero}: {len(orden.sierras)} sierras de {orden.sierras[0].dientes} dientes"
+
+    if tecla == 13:
+        pan.campo = min(pan.campo + 1, len(panel.CAMPOS_ORDEN) - 1)
+        pan.aviso = None
+    elif tecla in (8, 127):
+        pan.valores[pan.campo] = pan.valores[pan.campo][:-1]
+    elif 32 <= tecla <= 126:
+        letra = chr(tecla)
+        _, tipo = panel.CAMPOS_ORDEN[pan.campo]
+        if tipo == "numero" and not letra.isdigit():
+            # Una letra en "cuantas sierras" no es un error de dedo que se arregla solo:
+            # es un dato que despues rompe el informe.
+            pan.aviso = "aca va un numero"
+        elif len(pan.valores[pan.campo]) < 40:
+            pan.valores[pan.campo] += letra
+            pan.aviso = None
+    return True, None
 
 
 def _panel_lista(
@@ -420,6 +520,12 @@ def _panel_lista(
             )
         else:
             pan.modo = panel.MODO_BORRAR
+    elif accion == "orden" or tecla == ord("o"):
+        pan.modo, pan.aviso = panel.MODO_ORDEN, None
+        pan.cargando_orden = pan.orden is None
+        if pan.cargando_orden:
+            pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
+            pan.campo = 0
     elif (accion == "fotos" or tecla == ord("v")) and elegido is not None:
         pan.fotos = _fotos_del_destino(elegido, conceptos, galeria)
         pan.modo, pan.pagina, pan.foto_elegida, pan.aviso = panel.MODO_FOTOS, 0, 0, None
@@ -837,6 +943,13 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         "c abre los conceptos | f agrega foto de modelo | m cambia de modelo | q sale"
     )
 
+    # Las ordenes de afilado. Se retoma la que haya quedado abierta: el taller corta a
+    # mitad de una sierra para atender el mostrador, y perder el conteo seria volver a
+    # empezar la sierra.
+    ordenes = Ordenes(_DIR_ORDENES)
+    if ordenes.abierta is not None:
+        _registro.info("se retoma la %s", ordenes.abierta.resumen())
+
     # La memoria: lo que el programa aprendio de las fotos ya archivadas. Se pone al dia
     # antes de empezar, leyendo del disco solo lo que haya cambiado.
     memoria: Optional[Memoria] = None
@@ -934,9 +1047,45 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         refrescar()
         miniaturas.olvidar()
         _registro.info("foto archivada en '%s': %s", destino, ruta.name)
-        return f"GUARDADA como {destino}: {ruta.name}"
+        mensaje = f"GUARDADA como {destino}: {ruta.name}"
+
+        # Con una orden abierta, archivar un diente tambien lo ANOTA: el conteo avanza y
+        # queda en el informe. Lo que vale como estado es lo que dijo el operario --el
+        # archivo donde lo puso-- y lo que opinaba el programa queda al lado, para que un
+        # reclamo pueda ver las dos cosas.
+        orden = ordenes.abierta
+        if orden is not None:
+            opinion = ""
+            if estado.juicio is not None and estado.juicio.decidio:
+                opinion = f" (la memoria decia {estado.juicio.concepto})"
+            diente = orden.anotar(
+                estado=destino,
+                parecido=estado.juicio.parecido if estado.juicio is not None else None,
+                aprobado=destino not in cfg.clases_defecto,
+                origen=f"lo archivo el operario{opinion}",
+                foto=ruta.name,
+            )
+            ordenes.guardar()
+            actualizar_orden()
+            if diente is None:
+                mensaje = "ESTA SIERRA YA ESTA COMPLETA - pase a la siguiente con 'o'"
+            else:
+                sierra = orden.sierra()
+                mensaje = (
+                    f"DIENTE {diente.numero} de {sierra.dientes}: {destino}"
+                    if sierra is not None else mensaje
+                )
+        return mensaje
+
+    def actualizar_orden() -> None:
+        """Pone en la pantalla en que diente va la orden, si hay una abierta."""
+        orden = ordenes.abierta
+        estado.orden_resumen = orden.resumen() if orden is not None else ""
+        if pan is not None:
+            pan.orden = orden
 
     estado.botones_guardar = _destinos_rapidos(cfg)
+    actualizar_orden()
     if memoria is not None:
         estado.resumen_memoria = memoria.resumen()
     # Evaluacion en vivo: se clasifica cada N frames, pero el veredicto que se MUESTRA solo
@@ -1070,7 +1219,9 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     lambda destino: archivar(destino, pan.pendiente
                                              if pan.pendiente is not None else a_mostrar),
                     refrescar,
+                    ordenes,
                 )
+                actualizar_orden()
                 if mensaje is not None:
                     estado.mensaje = mensaje
                     expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
@@ -1096,12 +1247,14 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 accion = "modelo"
             elif tecla == ord("c"):
                 accion = "conceptos"
+            elif tecla == ord("o"):
+                accion = "orden"
 
             if accion is None:
                 continue
             if accion == "salir":
                 break
-            if accion == "conceptos":
+            if accion in ("conceptos", "orden"):
                 pan = panel.EstadoPanel(
                     conceptos=_lista_para_panel(conceptos, galeria),
                     pendiente=a_mostrar.copy(),
@@ -1112,7 +1265,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     recortada=(
                         memoria.autoevaluacion().recortada if memoria is not None else False
                     ),
+                    orden=ordenes.abierta,
                 )
+                if accion == "orden":
+                    pan.modo = panel.MODO_ORDEN
+                    pan.cargando_orden = ordenes.abierta is None
                 continue
 
             if accion == "revisar":

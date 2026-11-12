@@ -87,6 +87,9 @@ class EstadoRevision:
     # Los destinos rapidos de la barra: (clave, etiqueta, es_defecto). Vacio = los dos de
     # siempre. Los llena run_live con los conceptos que de verdad existen.
     botones_guardar: list[tuple[str, str, bool]] = field(default_factory=list)
+    # En que diente va la orden de afilado abierta. Vacio = no hay ninguna. Es lo que
+    # convierte una pila de fotos sueltas en "la sierra 2, diente 14 de 24".
+    orden_resumen: str = ""
 
 
 @dataclass
@@ -799,19 +802,24 @@ def componer_simple(
     conversiones de 1280x672 en cada frame.
     """
     margen = _MARGEN_SIMPLE
+    # La orden de afilado se lleva un renglon propio arriba de todo, y solo cuando hay una
+    # abierta: es el dato que el operario necesita mirar entre diente y diente --en cual
+    # va-- y no entra como aclaracion al costado de otra cosa.
+    alto_orden = 28 if estado.orden_resumen else 0
     alto_cabecera, alto_resultado, alto_botones = (
-        _ALTO_CABECERA, _ALTO_RESULTADO, _ALTO_BOTONES,
+        _ALTO_CABECERA + alto_orden, _ALTO_RESULTADO, _ALTO_BOTONES,
     )
+    alto_fijo = _ALTO_FIJO_SIMPLE + alto_orden
     ancho_panel = (ANCHO_LIENZO - 3 * margen) // 2
     alto_img, ancho_img = vivo.shape[:2]
     alto_panel = max(220, int(ancho_panel * alto_img / max(1, ancho_img)))
 
     if alto_maximo is not None:
         alto_panel = max(
-            _ALTO_MINIMO_PANEL, min(alto_panel, int(alto_maximo) - _ALTO_FIJO_SIMPLE)
+            _ALTO_MINIMO_PANEL, min(alto_panel, int(alto_maximo) - alto_fijo)
         )
 
-    alto_total = _ALTO_FIJO_SIMPLE + alto_panel
+    alto_total = alto_fijo + alto_panel
     lienzo = np.full((alto_total, ANCHO_LIENZO, 3), _FONDO, np.uint8)
 
     x_izq, x_der = margen, 2 * margen + ancho_panel
@@ -924,11 +932,15 @@ def componer_simple(
             pincel.texto(titulo_col, (x + (ancho_panel - ancho_t) // 2,
                                       alto_cabecera - alto_t - 12), _TEXTO_TENUE, 20, True)
 
+        if estado.orden_resumen:
+            pincel.texto(estado.orden_resumen, (margen + 2, 6), _TEXTO, 19, True)
+
         if "conceptos" not in botones:
             # El boton no entro en la barra --nombres de concepto largos-- y entonces la
             # unica forma de llegar al panel es la tecla. Si no se dice en ningun lado,
             # para el operario el panel no existe.
-            pincel.texto("tecla c: conceptos", (margen + 2, 10), _TEXTO_TENUE, 15)
+            pincel.texto("tecla c: conceptos", (margen + 2, 8 + alto_orden),
+                         _TEXTO_TENUE, 15)
 
         if referencia is None:
             for i, linea in enumerate(("No hay fotos de modelo.", "",
