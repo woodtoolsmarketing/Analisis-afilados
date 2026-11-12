@@ -155,3 +155,70 @@ def test_el_recorte_no_se_sale_de_la_foto() -> None:
     recorte = entero.recortar(imagen, margen=0.5)
 
     assert recorte.shape == imagen.shape
+
+
+# ---------------------------------------------------------------------------
+# EL FRENO DE MANO. Con la sierra mas lejos --varios dientes con sus huecos-- lo
+# mas claro de la imagen puede ser el hueco iluminado y no el diente: el taller
+# lo vio en pantalla, con el recuadro puesto sobre el hueco. Cuando pasa eso es
+# mejor analizar la foto entera, como se venia haciendo, que recortar el pedazo
+# equivocado: un recorte del hueco archivado como "afilado" envenena la memoria
+# sin que nadie se entere.
+# ---------------------------------------------------------------------------
+
+
+def _sierra_de_lejos(ancho: int = 480, alto: int = 360) -> np.ndarray:
+    """Un diente OSCURO sobre el disco claro, con el hueco al lado bien iluminado.
+
+    Es la estructura de la foto que mando el taller: el cuerpo del diente es lo mas
+    oscuro, la placa de arriba lo mas claro, y el hueco de al lado tambien brilla.
+    """
+    # Los brillos salen de la foto del taller: el disco ronda 135, el fondo 95, el cuerpo
+    # del diente 45, el hueco lustrado llega a 185 y la placa de widia a 250.
+    img = np.full((alto, ancho, 3), 95, np.uint8)          # fondo
+    cv2.rectangle(img, (0, 220), (ancho, alto), (135, 135, 135), -1)   # el disco
+    cv2.ellipse(img, (120, 250), (90, 60), 0, 0, 180, (165, 165, 165), -1)  # hueco lustrado
+    cv2.rectangle(img, (230, 110), (350, 250), (45, 45, 45), -1)       # cuerpo del diente
+    # La placa sobresale hacia la derecha, como en la foto del taller, y es lo mas claro.
+    cv2.rectangle(img, (228, 90), (408, 124), (250, 250, 250), -1)     # placa de widia
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def test_si_el_recuadro_no_agarra_el_filo_se_usa_la_foto_entera() -> None:
+    encontrados = D.detectar(_sierra_de_lejos())
+
+    # O cae sobre el diente, o se usa la foto entera. Lo que no puede es devolver un
+    # recuadro que no contenga la parte que corta.
+    assert len(encontrados) >= 1
+    gris = cv2.cvtColor(_sierra_de_lejos(), cv2.COLOR_BGR2GRAY)
+    assert D._tapan_el_filo(gris, encontrados)
+
+
+def test_un_recuadro_que_se_pierde_el_filo_se_rechaza() -> None:
+    """La prueba directa del control, con el recuadro puesto a mano sobre el hueco."""
+    imagen = _sierra_de_lejos()
+    gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+    sobre_el_hueco = [D.Diente(caja=(30, 190, 210, 310), area=0.13)]
+    sobre_el_diente = [D.Diente(caja=(215, 85, 365, 260), area=0.15)]
+
+    assert not D._tapan_el_filo(gris, sobre_el_hueco)
+    assert D._tapan_el_filo(gris, sobre_el_diente)
+
+
+def test_dos_dientes_juntos_pasan_el_control_aunque_cada_uno_tenga_la_mitad() -> None:
+    """Se mira el CONJUNTO: con dos a la vista, cada recuadro tiene la mitad del brillo."""
+    imagen = _pegar(_diente(0), _diente(3))
+    encontrados = D.detectar(imagen)
+
+    assert len(encontrados) == 2
+    gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+    assert D._tapan_el_filo(gris, encontrados)
+    assert not D._tapan_el_filo(gris, encontrados[:1])
+
+
+def test_que_sobren_dientes_para_el_tope_no_dispara_el_freno() -> None:
+    """Pedir 2 cuando hay 3 no quiere decir que los recuadros esten mal puestos."""
+    encontrados = D.detectar(_pegar(_diente(0), _diente(2), _diente(5)), maximo=2)
+
+    assert len(encontrados) == 2
+    assert not any(d.entero for d in encontrados)

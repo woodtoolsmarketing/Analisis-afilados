@@ -109,12 +109,59 @@ def detectar(frame: Optional[np.ndarray], maximo: int = 4) -> list[Diente]:
 
     if not encontrados:
         return [entera]
+    # El control se hace sobre TODO lo encontrado, antes de recortar la lista: que sobren
+    # dientes para el tope pedido no quiere decir que los recuadros esten mal puestos.
+    if not _tapan_el_filo(gris, encontrados):
+        return [entera]
     # Los mas grandes primero para quedarse con los mejores, y despues de izquierda a
     # derecha, que es como los va a mirar el operario y como se numeran en la pantalla.
     encontrados.sort(key=lambda d: -d.area)
     encontrados = encontrados[: max(1, int(maximo))]
     encontrados.sort(key=lambda d: d.caja[0])
     return encontrados
+
+
+# Que parte de lo MAS BRILLANTE de la foto tiene que quedar adentro de los recuadros para
+# creerles. En un diente, lo mas brillante es la cara que corta --la placa de widia, o la
+# cara lustrada del filo-- y es justo lo que hay que mirar para decir si esta bien afilado.
+# Un recuadro que no la contiene no esta sobre un diente.
+#
+# Medido sobre las 21 fotos de microscopio que hay:
+#
+#     las 19 donde el recuadro cae bien     0.98 a 1.00  (mediana 1.00)
+#     el recuadro que cayo en el hueco      0.45
+#     el mismo diente, marcado a mano       0.94
+#
+# El corte va en 0.70, entre medio y lejos de los dos.
+_FRACCION_DEL_FILO = 0.70
+_PERCENTIL_FILO = 97
+
+
+def _tapan_el_filo(gris: np.ndarray, encontrados: list[Diente]) -> bool:
+    """Si los recuadros contienen lo mas brillante de la foto, que es el filo.
+
+    Se mira el CONJUNTO y no cada uno: con dos dientes a la vista, cada recuadro tiene la
+    mitad del brillo y los dos solos no pasarian.
+
+    Esto es el freno de mano. Con la sierra mas lejos --varios dientes y sus huecos-- lo
+    mas claro de la imagen puede ser el hueco iluminado y no el diente, y entonces el
+    recuadro cae sobre el hueco: el taller lo vio en pantalla. Cuando eso pasa es mejor
+    analizar la foto entera, como se venia haciendo, que recortar el pedazo equivocado:
+    un recorte del hueco archivado como "afilado" envenena la memoria sin que se note.
+    """
+    try:
+        corte = float(np.percentile(gris, _PERCENTIL_FILO))
+    except (ValueError, TypeError):
+        return True
+    brillante = gris >= corte
+    total = float(brillante.sum())
+    if total <= 0:
+        return True
+    tapado = np.zeros(gris.shape, bool)
+    for diente in encontrados:
+        x1, y1, x2, y2 = diente.caja
+        tapado[y1:y2, x1:x2] = True
+    return float((brillante & tapado).sum()) / total >= _FRACCION_DEL_FILO
 
 
 def _componentes(mascara: np.ndarray, forma: tuple[int, int]) -> list[Diente]:
