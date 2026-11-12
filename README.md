@@ -518,6 +518,59 @@ microscopio y se vea como se porta.
 | `m` | **OTRO MODELO** | Pasa a la siguiente foto de modelo. |
 | `q` | **SALIR** | Cierra. |
 
+#### Un resultado POR DIENTE
+
+Lo normal es que entre **un diente** y se analice ese. Pero si entran dos --o tres-- el
+programa los separa y **juzga cada uno por su cuenta**: sobre cada diente aparece un
+recuadro con **su porcentaje**, verde si paso y rojo si no. El numero y no la palabra: el
+color ya dice si paso, y el porcentaje es el dato que se puede discutir.
+
+```
+   SIERRA                                ASI SE VE CADA ESTADO
+  +--------------------------------+    +---------------+---------------+
+  | +--- 1  93% ---+ +-- 2  81% --+|    |               |               |
+  | |   (verde)    | |   (rojo)   ||    |   1 afilado   | 2 mal_afilado |
+  | +--------------+ +------------+|    +---------------+---------------+
+  +--------------------------------+
+
+                    2 DIENTES
+   1 bien, 1 para rechazar  -  el porcentaje de cada uno esta sobre su recuadro
+   se va a guardar el diente 1   -   con las teclas 1 2 elegis cual
+```
+
+A la derecha, en vez de la foto de modelo, aparece **un ejemplo de cada estado**: la foto
+guardada a la que se parecio cada diente, con el mismo numero que su recuadro. Asi se ve
+contra que se comparo cada cual.
+
+**Se guarda de a un diente.** Con dos en pantalla, las teclas `1` y `2` eligen cual se
+archiva (el elegido tiene el borde mas grueso). Marcar los dos con el mismo estado de un
+saque etiquetaria mal el que no se miro, y una foto mal etiquetada no se nota hasta que el
+modelo sale raro meses despues. Lo que se guarda es **el recorte de ese diente**, no la foto
+entera: la memoria juzga el recorte, asi que lo que el programa aprende y lo que compara
+tienen que ser lo mismo.
+
+**Como los separa, sin modelo entrenado.** La cara iluminada del diente es lo mas claro de
+la imagen; Otsu encuentra ese corte solo, sin ningun numero puesto a mano. Se probaron cinco
+caminos sobre las 19 fotos reales del microscopio y sobre fotos armadas pegando dos y tres
+dientes:
+
+| metodo | 1 diente da 1 | 2 dientes dan 2 |
+|---|---|---|
+| **otsu por brillo** | **19 de 19** | **16 de 19** |
+| otsu invertido | 19 de 19 | 3 de 19 |
+| por textura | 17 de 19 | 2 de 19 |
+| umbral adaptativo | 3 de 19 | 2 de 19 |
+| por columnas | 8 de 19 | 3 de 19 |
+
+Con tres dientes devuelve los tres 13 de 19 veces y 2 las otras 6. **Cuando no encuentra
+nada** --la tapa puesta, una pared-- el diente es la foto entera y el programa se comporta
+como venia: no se pierde nada por no detectar.
+
+> Se probo tambien repetir la busqueda tapando lo ya encontrado, para rescatar un segundo
+> diente mas oscuro. **Empeora**: sube de 16 a 17 de 19 en el caso de dos, pero en el de UN
+> diente empieza a inventar un segundo (de 19 a 11 de 19). Inventar un diente es peor que
+> perderlo, porque termina como un resultado de algo que no existe en el informe de la orden.
+
 #### La memoria: el programa aprende de cada foto que se archiva
 
 **No hay cupo que llenar.** Cada foto que se guarda en un concepto se suma AL INSTANTE a lo

@@ -698,3 +698,121 @@ def test_la_pantalla_entera_se_arma_con_el_veredicto_de_la_memoria(cfg: AppConfi
 
     assert pantalla.imagen.shape[0] == 672
     assert _color_pintado(pantalla, revision._VERDE_OK)
+
+
+# ---------------------------------------------------------------------------
+# EL ANALISIS POR DIENTE. Con dos dientes en la imagen no hay UN veredicto: hay
+# uno por diente, cada uno sobre su recuadro, y el cartel grande pasa a ser el
+# resumen. Un APROBADO enorme sobre una foto con un diente bueno y uno roto
+# seria mentira.
+# ---------------------------------------------------------------------------
+
+
+def _en_pantalla(**kwargs) -> revision.DienteEnPantalla:
+    datos = dict(caja=(10, 10, 100, 100), parecido=0.9, aprobado=True, concepto="afilado")
+    datos.update(kwargs)
+    return revision.DienteEnPantalla(**datos)
+
+
+def test_con_un_solo_diente_el_cartel_es_el_de_siempre(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(
+        congelado=True, dientes=[_en_pantalla()],
+        juicio=Juicio(concepto="aprobada", parecido=0.9, fotos_en_memoria=8,
+                      vecinos=[Vecino(concepto="aprobada", archivo="a.jpg", parecido=0.9,
+                                      alineado=0.9, bordes=0.9)]),
+    )
+
+    titulo, _, _, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO" and aprobado is True
+
+
+def test_con_dos_dientes_el_cartel_resume(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(aprobado=True),
+        _en_pantalla(caja=(200, 10, 300, 100), aprobado=False, concepto="roto"),
+    ])
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "2 DIENTES"
+    assert "1 bien" in detalle and "1 para rechazar" in detalle
+    # Alcanza uno malo para que la sierra no pase: el color manda al rojo.
+    assert color == revision._ROJO_NO and aprobado is False
+
+
+def test_dos_dientes_buenos_pintan_verde(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(), _en_pantalla(caja=(200, 10, 300, 100)),
+    ])
+
+    _, _, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert color == revision._VERDE_OK and aprobado is True
+
+
+def test_un_diente_sin_decidir_no_deja_pasar_la_sierra(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(), _en_pantalla(caja=(200, 10, 300, 100), aprobado=None, concepto=None),
+    ])
+
+    _, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert "1 sin decidir" in detalle
+    assert color == revision._AMBAR and aprobado is None
+
+
+def test_la_segunda_linea_dice_cual_se_guarda(cfg: AppConfig) -> None:
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(elegido=False),
+        _en_pantalla(caja=(200, 10, 300, 100), elegido=True),
+    ])
+
+    extra = revision.detalle_extra(estado, cfg)
+
+    assert "diente 2" in extra and "1 2" in extra
+
+
+def test_el_recuadro_de_cada_diente_se_dibuja(cfg: AppConfig) -> None:
+    """Dos cajas chicas sobre la imagen: tienen que aparecer el verde y el rojo."""
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(caja=(20, 20, 200, 300), aprobado=True),
+        _en_pantalla(caja=(380, 20, 600, 300), aprobado=False, concepto="roto"),
+    ])
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado, 672)
+
+    # _color_pintado mira solo la tarjeta del resultado; los recuadros van sobre la foto.
+    for color in (revision._VERDE_OK, revision._ROJO_NO):
+        pintados = (pantalla.imagen == np.array(color, np.uint8)).all(axis=2).sum()
+        assert pintados > 500, f"no se dibujo el recuadro {color}"
+
+
+def test_un_diente_que_ocupa_toda_la_foto_no_lleva_recuadro(cfg: AppConfig) -> None:
+    """Seria el borde del panel: no agrega nada y tapa la imagen."""
+    imagen = _imagen()
+    alto, ancho = imagen.shape[:2]
+    estado = revision.EstadoRevision(
+        congelado=True, dientes=[_en_pantalla(caja=(0, 0, ancho, alto))]
+    )
+
+    pantalla = revision.componer_simple(imagen, imagen, cfg, estado, 672)
+
+    assert pantalla.imagen.shape[0] == 672
+
+
+def test_con_dos_dientes_la_derecha_muestra_un_ejemplo_de_cada_uno(cfg: AppConfig) -> None:
+    ejemplo_a = np.full((80, 100, 3), 200, np.uint8)
+    ejemplo_b = np.full((80, 100, 3), 60, np.uint8)
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(ejemplo=ejemplo_a, concepto="afilado"),
+        _en_pantalla(caja=(380, 20, 600, 300), ejemplo=ejemplo_b, concepto="roto",
+                     aprobado=False),
+    ])
+
+    pantalla = revision.componer_simple(_imagen(), _imagen(), cfg, estado, 672)
+
+    # Las dos fotos de ejemplo tienen que estar en la mitad derecha del lienzo.
+    derecha = pantalla.imagen[:, revision.ANCHO_LIENZO // 2:]
+    assert (np.abs(derecha.astype(int) - 200) < 12).any()
+    assert (np.abs(derecha.astype(int) - 60) < 12).any()

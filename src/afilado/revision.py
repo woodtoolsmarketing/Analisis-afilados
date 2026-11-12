@@ -53,6 +53,24 @@ Rect = tuple[int, int, int, int]  # x1, y1, x2, y2
 
 
 @dataclass
+class DienteEnPantalla:
+    """Un diente encontrado en la imagen, con lo que la memoria dijo de EL.
+
+    La caja va en coordenadas de la FOTO, no del panel: el panel escala y centra, y esa
+    cuenta la hace la pantalla al dibujar. Asi el que detecta no tiene que saber nada de
+    como se muestra.
+    """
+
+    caja: tuple[int, int, int, int]
+    parecido: Optional[float] = None       # 0..1, la coincidencia de ESE diente
+    aprobado: Optional[bool] = None
+    concepto: Optional[str] = None
+    ejemplo: Optional[np.ndarray] = None   # una foto guardada de ese mismo estado
+    elegido: bool = False                  # el que se archiva si se aprieta GUARDAR
+    juicio: Optional[Juicio] = None        # lo que dijo la memoria de ESTE diente
+
+
+@dataclass
 class EstadoRevision:
     """Todo lo que la pantalla necesita saber para dibujarse."""
 
@@ -90,6 +108,9 @@ class EstadoRevision:
     # En que diente va la orden de afilado abierta. Vacio = no hay ninguna. Es lo que
     # convierte una pila de fotos sueltas en "la sierra 2, diente 14 de 24".
     orden_resumen: str = ""
+    # Los dientes encontrados en la imagen, cada uno con lo suyo. Vacio = la pantalla se
+    # dibuja como siempre, juzgando la foto entera.
+    dientes: list[DienteEnPantalla] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +128,22 @@ class Pantalla:
         return None
 
 
+def _encaje(imagen: Optional[np.ndarray], ancho: int, alto: int) -> tuple[float, int, int]:
+    """(escala, x0, y0) con que _encajar mete la imagen adentro del recuadro.
+
+    Aparte para poder dibujar ENCIMA en las mismas coordenadas: los recuadros de los
+    dientes se calculan sobre la foto original y tienen que caer donde esta esa foto ya
+    escalada y centrada. Sin esto, las cajas quedan corridas respecto del diente.
+    """
+    if imagen is None or imagen.size == 0:
+        return 1.0, 0, 0
+    alto_img, ancho_img = imagen.shape[:2]
+    escala = min(ancho / ancho_img, alto / alto_img)
+    nuevo_ancho = max(1, int(ancho_img * escala))
+    nuevo_alto = max(1, int(alto_img * escala))
+    return escala, (ancho - nuevo_ancho) // 2, (alto - nuevo_alto) // 2
+
+
 def _encajar(imagen: np.ndarray, ancho: int, alto: int) -> np.ndarray:
     """Escala la imagen para entrar en ancho x alto SIN deformarla, con bandas negras.
 
@@ -119,14 +156,12 @@ def _encajar(imagen: np.ndarray, ancho: int, alto: int) -> np.ndarray:
     if imagen.ndim == 2:
         imagen = cv2.cvtColor(imagen, cv2.COLOR_GRAY2BGR)
 
+    escala, x0, y0 = _encaje(imagen, ancho, alto)
     alto_img, ancho_img = imagen.shape[:2]
-    escala = min(ancho / ancho_img, alto / alto_img)
     nuevo = (max(1, int(ancho_img * escala)), max(1, int(alto_img * escala)))
     interpolacion = cv2.INTER_AREA if escala < 1.0 else cv2.INTER_LINEAR
     redimensionada = cv2.resize(imagen, nuevo, interpolation=interpolacion)
 
-    x0 = (ancho - nuevo[0]) // 2
-    y0 = (alto - nuevo[1]) // 2
     panel[y0 : y0 + nuevo[1], x0 : x0 + nuevo[0]] = redimensionada
     return panel
 
@@ -662,6 +697,12 @@ def estado_resultado(
     # decir que lo produjo fue el error que hizo aparecer un DESAPROBADO 36% con las dos
     # imagenes practicamente iguales: el numero venia de un modelo entrenado con otra cosa
     # y nadie podia saberlo mirando la pantalla.
+    # Con VARIOS dientes a la vista no hay un veredicto: hay uno por diente, y cada uno
+    # esta escrito sobre su recuadro. El cartel pasa a ser el resumen, porque un unico
+    # APROBADO enorme sobre una foto con un diente bueno y uno roto seria mentira.
+    if len(estado.dientes) > 1:
+        return _resultado_de_varios(estado)
+
     valor = coincidencia(estado.veredicto, cfg)
     origen = "segun el modelo entrenado"
     umbral = float(cfg.interfaz.umbral_aprobacion)
@@ -696,6 +737,30 @@ def estado_resultado(
     return "DESAPROBADO", detalle, _ROJO_NO, False
 
 
+def _resultado_de_varios(estado: EstadoRevision) -> tuple[str, str, tuple, Optional[bool]]:
+    """El cartel cuando hay mas de un diente en la imagen: el resumen de los recuadros."""
+    buenos = sum(1 for d in estado.dientes if d.aprobado is True)
+    malos = sum(1 for d in estado.dientes if d.aprobado is False)
+    dudosos = len(estado.dientes) - buenos - malos
+
+    partes = []
+    if buenos:
+        partes.append(f"{buenos} bien")
+    if malos:
+        partes.append(f"{malos} para rechazar")
+    if dudosos:
+        partes.append(f"{dudosos} sin decidir")
+    detalle = ", ".join(partes) + "  -  el porcentaje de cada uno esta sobre su recuadro"
+
+    if malos:
+        color, aprobado = _ROJO_NO, False
+    elif dudosos:
+        color, aprobado = _AMBAR, None
+    else:
+        color, aprobado = _VERDE_OK, True
+    return f"{len(estado.dientes)} DIENTES", detalle, color, aprobado
+
+
 def _resultado_de_memoria(juicio: Juicio, cfg: AppConfig) -> tuple[str, str, tuple, Optional[bool]]:
     """El cartel cuando quien opina es la memoria de fotos archivadas.
 
@@ -725,6 +790,18 @@ def detalle_extra(estado: EstadoRevision, cfg: AppConfig) -> Optional[str]:
     acierta la memoria en casos igual de ajustados, y en que parte de la imagen esta la
     diferencia. Un porcentaje dice cuanto se parece; la zona dice donde mirar.
     """
+    if len(estado.dientes) > 1:
+        # Con varios dientes hay que decir cual se va a guardar, porque el que se archiva
+        # es uno solo: marcar los dos de un saque etiquetaria mal el que no se miro.
+        elegido = next(
+            (n for n, d in enumerate(estado.dientes, start=1) if d.elegido), 1
+        )
+        numeros = " ".join(str(n) for n in range(1, len(estado.dientes) + 1))
+        return (
+            f"se va a guardar el diente {elegido}   -   con las teclas {numeros} "
+            "elegis cual"
+        )
+
     juicio = estado.juicio
     if juicio is None or not juicio.decidio:
         return None
@@ -751,7 +828,12 @@ def _progreso_del_dataset(estado: EstadoRevision, cfg) -> str:
     if estado.resumen_memoria:
         return estado.resumen_memoria
     if not estado.conteos:
-        return "guarde fotos con APROBADA y RECHAZADA para que el programa aprenda"
+        # Se nombran los conceptos QUE HAY, no dos fijos: el taller los cambia desde el
+        # panel, y mandarlo a guardar en una carpeta que ya no existe no ayuda a nadie.
+        nombres = [c for c in getattr(cfg, "clases", []) if c][:3]
+        if nombres:
+            return "guarde fotos en " + " / ".join(n.upper() for n in nombres)
+        return "cree un concepto y guarde fotos para que el programa aprenda"
     partes = [f"{clase} {cantidad}" for clase, cantidad in estado.conteos.items()]
     return "fotos guardadas:  " + "  ".join(partes)
 
@@ -785,6 +867,91 @@ def _boton_lindo(
     x2 = x + ancho_texto + 2 * _RELLENO_BOTON
     _rect_redondeado(img, (x, y1), (x2, y2), color, 10, -1)
     return (x, y1, x2, y2)
+
+
+def _color_de(diente: "DienteEnPantalla") -> tuple:
+    """Verde si ese diente paso, rojo si no, ambar si no se pudo decidir."""
+    if diente.aprobado is True:
+        return _VERDE_OK
+    if diente.aprobado is False:
+        return _ROJO_NO
+    return _AMBAR
+
+
+def _marcar_dientes(
+    lienzo, estado: EstadoRevision, vivo, x_panel: int, y_panel: int,
+    ancho_panel: int, alto_panel: int,
+) -> list[tuple[str, tuple[int, int], tuple, int, bool]]:
+    """Dibuja un recuadro sobre cada diente. Devuelve los textos para la pasada de texto.
+
+    Con un solo diente encontrado en toda la foto --el caso normal-- no se dibuja nada: el
+    recuadro seria el borde del panel y no agrega informacion.
+    """
+    textos: list[tuple[str, tuple[int, int], tuple, int, bool]] = []
+    if not estado.dientes or vivo is None:
+        return textos
+    if len(estado.dientes) == 1 and estado.dientes[0].caja[:2] == (0, 0):
+        alto_img, ancho_img = vivo.shape[:2]
+        if estado.dientes[0].caja == (0, 0, ancho_img, alto_img):
+            return textos
+
+    escala, x0, y0 = _encaje(vivo, ancho_panel, alto_panel)
+    for numero, diente in enumerate(estado.dientes, start=1):
+        x1, y1, x2, y2 = diente.caja
+        px1 = x_panel + x0 + int(x1 * escala)
+        py1 = y_panel + y0 + int(y1 * escala)
+        px2 = x_panel + x0 + int(x2 * escala)
+        py2 = y_panel + y0 + int(y2 * escala)
+        px1 = max(x_panel, min(px1, x_panel + ancho_panel - 2))
+        px2 = max(px1 + 2, min(px2, x_panel + ancho_panel))
+        py1 = max(y_panel, min(py1, y_panel + alto_panel - 2))
+        py2 = max(py1 + 2, min(py2, y_panel + alto_panel))
+
+        color = _color_de(diente)
+        grosor = 5 if diente.elegido else 3
+        _rect_redondeado(lienzo, (px1, py1), (px2, py2), color, 8, grosor)
+
+        texto = "?" if diente.parecido is None else f"{diente.parecido * 100:.0f}%"
+        if len(estado.dientes) > 1:
+            texto = f"{numero}  {texto}"
+        ancho_t, alto_t = tipografia.medir(texto, 26, negrita=True)
+        # La etiqueta va ARRIBA de la caja, salvo que no entre y tenga que ir adentro.
+        y_etiqueta = py1 - alto_t - 10
+        if y_etiqueta < y_panel:
+            y_etiqueta = py1 + 6
+        _rect_redondeado(lienzo, (px1, y_etiqueta - 5),
+                         (px1 + ancho_t + 20, y_etiqueta + alto_t + 7), color, 8, -1)
+        textos.append((texto, (px1 + 10, y_etiqueta), _color_texto(color), 26, True))
+    return textos
+
+
+def _columnas_de_ejemplo(
+    lienzo, estado: EstadoRevision, ejemplos: list["DienteEnPantalla"],
+    x_panel: int, y_panel: int, ancho_panel: int, alto_panel: int,
+) -> list[tuple[str, tuple[int, int], tuple, int, bool]]:
+    """El panel derecho partido: una foto de ejemplo por diente, con su numero."""
+    textos: list[tuple[str, tuple[int, int], tuple, int, bool]] = []
+    cuantos = min(len(ejemplos), 3)
+    ancho_col = (ancho_panel - (cuantos - 1) * 6) // cuantos
+    alto_foto = alto_panel - 30
+    for indice in range(cuantos):
+        diente = ejemplos[indice]
+        numero = estado.dientes.index(diente) + 1 if diente in estado.dientes else indice + 1
+        x = x_panel + indice * (ancho_col + 6)
+        lienzo[y_panel : y_panel + alto_foto, x : x + ancho_col] = _encajar(
+            diente.ejemplo, ancho_col, alto_foto
+        )
+        color = _color_de(diente)
+        _rect_redondeado(lienzo, (x, y_panel), (x + ancho_col, y_panel + alto_foto),
+                         color, 8, 3)
+        etiqueta = f"{numero}  {diente.concepto or 'sin estado'}"
+        ancho_t, _ = tipografia.medir(etiqueta, 18, negrita=True)
+        tamano = 18
+        while ancho_t > ancho_col - 8 and tamano > 11:
+            tamano -= 1
+            ancho_t, _ = tipografia.medir(etiqueta, tamano, negrita=True)
+        textos.append((etiqueta, (x + 4, y_panel + alto_foto + 6), _TEXTO_TENUE, tamano, True))
+    return textos
 
 
 def componer_simple(
@@ -826,18 +993,41 @@ def componer_simple(
     y_panel = alto_cabecera
 
     # ---------------- formas ----------------
-    for x, imagen in ((x_izq, vivo), (x_der, referencia)):
-        _tarjeta(lienzo, (x - 3, y_panel - 3), (x + ancho_panel + 3, y_panel + alto_panel + 3))
-        if imagen is not None:
-            lienzo[y_panel : y_panel + alto_panel, x : x + ancho_panel] = _encajar(
-                imagen, ancho_panel, alto_panel
-            )
+    _tarjeta(lienzo, (x_izq - 3, y_panel - 3),
+             (x_izq + ancho_panel + 3, y_panel + alto_panel + 3))
+    if vivo is not None:
+        lienzo[y_panel : y_panel + alto_panel, x_izq : x_izq + ancho_panel] = _encajar(
+            vivo, ancho_panel, alto_panel
+        )
 
+    # El recuadro de cada diente, con su porcentaje. Lo que va adentro del recuadro es el
+    # NUMERO, no la palabra: el color ya dice si paso o no, y el porcentaje es el dato que
+    # el operario puede discutir. "APROBADO" ahi arriba seria la misma palabra dos veces.
+    etiquetas_diente = _marcar_dientes(lienzo, estado, vivo, x_izq, y_panel,
+                                       ancho_panel, alto_panel)
+
+    ejemplos = [d for d in estado.dientes if d.ejemplo is not None]
+    _tarjeta(lienzo, (x_der - 3, y_panel - 3),
+             (x_der + ancho_panel + 3, y_panel + alto_panel + 3))
+    if len(ejemplos) > 1:
+        # Varios dientes a la vista: a la derecha va el ejemplo de CADA UNO, con el mismo
+        # numero que su recuadro, para que se vea contra que se comparo cada cual.
+        etiquetas_diente += _columnas_de_ejemplo(
+            lienzo, estado, ejemplos, x_der, y_panel, ancho_panel, alto_panel
+        )
+    elif referencia is not None:
+        lienzo[y_panel : y_panel + alto_panel, x_der : x_der + ancho_panel] = _encajar(
+            referencia, ancho_panel, alto_panel
+        )
+
+    # El cartelito de CONGELADA va ABAJO a la izquierda: arriba choca con la etiqueta del
+    # primer diente, que es el porcentaje y es lo que hay que poder leer.
+    y_congelada = y_panel + alto_panel - 44
     if estado.congelado:
         ancho_c, _ = tipografia.medir("CONGELADA", 17, negrita=True)
         _rect_redondeado(
-            lienzo, (x_izq + 10, y_panel + 10),
-            (x_izq + 10 + ancho_c + 24, y_panel + 44), _FONDO, 8, -1,
+            lienzo, (x_izq + 10, y_congelada),
+            (x_izq + 10 + ancho_c + 24, y_congelada + 34), _FONDO, 8, -1,
         )
 
     titulo, detalle, color, aprobado = estado_resultado(estado, cfg)
@@ -922,7 +1112,9 @@ def componer_simple(
     # ---------------- texto, todo de una pasada ----------------
     with tipografia.Pincel(lienzo) as pincel:
         titulo_modelo = "MODELO APROBADO"
-        if estado.nombre_referencia:
+        if len(ejemplos) > 1:
+            titulo_modelo = "ASI SE VE CADA ESTADO"
+        elif estado.nombre_referencia:
             titulo_modelo = f"MODELO: {estado.nombre_referencia.upper()}"
             cual, cuantos = estado.posicion_referencia
             if cuantos > 1:
@@ -942,14 +1134,14 @@ def componer_simple(
             pincel.texto("tecla c: conceptos", (margen + 2, 8 + alto_orden),
                          _TEXTO_TENUE, 15)
 
-        if referencia is None:
+        if referencia is None and not ejemplos:
             for i, linea in enumerate(("No hay fotos de modelo.", "",
                                        "Pone una pieza buena", "y apreta la tecla  f")):
                 if linea:
                     pincel.texto(linea, (x_der + 26, y_panel + 52 + i * 34), _TEXTO_TENUE, 20)
 
         if estado.congelado:
-            pincel.texto("CONGELADA", (x_izq + 22, y_panel + 19), _TEXTO, 17, True)
+            pincel.texto("CONGELADA", (x_izq + 22, y_congelada + 9), _TEXTO, 17, True)
 
         ancho_v, alto_v = tipografia.medir(titulo, 54, negrita=True)
         tamano_v = 54
@@ -973,6 +1165,9 @@ def componer_simple(
             ancho_u, _ = tipografia.medir(texto_umbral, 16)
             pincel.texto(texto_umbral, (ANCHO_LIENZO - margen - 30 - ancho_u, cy + 60),
                          _TEXTO_TENUE, 16)
+
+        for texto_d, posicion_d, color_d, tamano_d, negrita_d in etiquetas_diente:
+            pincel.texto(texto_d, posicion_d, color_d, tamano_d, negrita_d)
 
         for texto_boton, rect, color_boton in etiquetas:
             tamano = 24 if texto_boton == "REVISAR" else 21

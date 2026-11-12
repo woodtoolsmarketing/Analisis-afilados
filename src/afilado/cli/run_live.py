@@ -35,7 +35,7 @@ from typing import Optional, Union
 import cv2
 import numpy as np
 
-from .. import overlay, panel, revision
+from .. import dientes, overlay, panel, revision
 from ..referencias import GaleriaReferencias
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara, enumerar_camaras
@@ -67,6 +67,11 @@ _DESTINO_MODELO = "foto de modelo"
 
 # Donde quedan las ordenes de afilado y sus informes, al lado del programa.
 _DIR_ORDENES = "data/ordenes"
+
+# Cuantos dientes se buscan en una imagen. Lo normal es uno; dos pasa seguido y tres a
+# veces. Mas que esto, en una foto de microscopio, es que algo se entendio mal: antes de
+# analizar seis pedazos conviene que el operario acerque y mire de a uno.
+_MAX_DIENTES = 4
 
 # Donde queda el registro de lo que paso. Abierto con doble clic NO hay consola --esa es
 # justamente la idea-- asi que si el log solo fuera a pantalla se perderia entero, y es lo
@@ -315,6 +320,70 @@ def _destinos_rapidos(cfg: AppConfig) -> list[tuple[str, str, bool]]:
                 (clase, _ETIQUETAS_AMIGAS.get(clase, f"GUARDAR {clase.upper()}"), es_defecto)
             )
     return destinos
+
+
+def _analizar_dientes(
+    frame, memoria, cfg: AppConfig, referencia, ejemplos: dict,
+) -> list[revision.DienteEnPantalla]:
+    """Separa los dientes de la imagen y juzga CADA UNO por su cuenta.
+
+    El porcentaje de cada diente sale de la misma fuente que el de la pantalla entera
+    --primero la memoria, si no el parecido contra la foto de modelo-- pero medido sobre
+    el recorte de ese diente y no sobre la foto completa. Con dos dientes adentro, juzgar
+    la foto entera daba un numero que no era de ninguno de los dos.
+    """
+    encontrados = dientes.detectar(frame, maximo=_MAX_DIENTES)
+    if not encontrados:
+        return []
+
+    listos = memoria is not None and memoria.lista_para_juzgar(
+        cfg.memoria.minimo_por_concepto
+    )
+    en_pantalla: list[revision.DienteEnPantalla] = []
+    for indice, encontrado in enumerate(encontrados):
+        recorte = encontrado.recortar(frame)
+        parecido = aprobado = concepto = ejemplo = None
+        juicio = None
+        if listos:
+            juicio = memoria.juzgar(
+                recorte,
+                parecido_minimo=cfg.memoria.parecido_minimo,
+                confianza_minima=cfg.memoria.confianza_minima,
+                minimo_por_concepto=cfg.memoria.minimo_por_concepto,
+            )
+            parecido = juicio.parecido or None
+            if juicio.decidio:
+                concepto = juicio.concepto
+                aprobado = concepto not in cfg.clases_defecto
+                ejemplo = _foto_de_ejemplo(juicio, ejemplos)
+        else:
+            parecido = revision.parecido(recorte, referencia)
+            if parecido is not None and getattr(cfg.interfaz, "veredicto_por_parecido", False):
+                aprobado = parecido >= float(cfg.interfaz.umbral_parecido)
+        en_pantalla.append(
+            revision.DienteEnPantalla(
+                caja=encontrado.caja, parecido=parecido, aprobado=aprobado,
+                concepto=concepto, ejemplo=ejemplo, elegido=indice == 0, juicio=juicio,
+            )
+        )
+    return en_pantalla
+
+
+def _foto_de_ejemplo(juicio, ejemplos: dict):
+    """La foto guardada a la que se parecio este diente. Se lee una sola vez.
+
+    Es lo que contesta "como es un diente bien afilado" sin que el operario tenga que
+    ir a buscar la carpeta: al lado del diente que esta mirando queda el que la memoria
+    tomo de ejemplo.
+    """
+    propio = next((v for v in juicio.vecinos if v.concepto == juicio.concepto), None)
+    if propio is None:
+        return None
+    if propio.archivo not in ejemplos:
+        if len(ejemplos) > 24:
+            ejemplos.clear()
+        ejemplos[propio.archivo] = cv2.imread(propio.archivo)
+    return ejemplos[propio.archivo]
 
 
 def _lista_para_panel(conceptos: Conceptos, galeria: GaleriaReferencias) -> list[Concepto]:
@@ -985,6 +1054,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     # la pantalla es el panel.
     pan: Optional[panel.EstadoPanel] = None
     miniaturas = panel.Miniaturas()
+    # Las fotos de ejemplo que se muestran al lado de cada diente, leidas una sola vez.
+    ejemplos: dict = {}
     alto_lienzo = revision.ALTO_MINIMO_LIENZO
 
     def refrescar(recalcular: bool = True) -> None:
@@ -1022,6 +1093,21 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             pan.aciertos = auto.por_concepto if auto is not None else {}
             pan.recortada = bool(auto.recortada) if auto is not None else False
 
+    def diente_elegido() -> Optional[revision.DienteEnPantalla]:
+        return next((d for d in estado.dientes if d.elegido), None)
+
+    def recorte_a_archivar(imagen: np.ndarray) -> np.ndarray:
+        """Lo que se guarda es EL DIENTE, no la foto entera.
+
+        La memoria juzga el recorte de cada diente, asi que lo que se archiva tiene que
+        ser lo mismo que se juzgo: si se guardara la foto completa, lo que el programa
+        aprende y lo que el programa compara serian dos cosas distintas.
+        """
+        elegido = diente_elegido()
+        if elegido is None:
+            return imagen
+        return dientes.Diente(caja=elegido.caja, area=0.0).recortar(imagen)
+
     def archivar(destino: str, imagen: np.ndarray) -> str:
         """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
         if destino == _DESTINO_MODELO:
@@ -1038,6 +1124,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             miniaturas.olvidar()
             _registro.info("nueva foto de modelo en %s", ruta)
             return f"MODELO AGREGADO: {ruta.stem}"
+        imagen = recorte_a_archivar(imagen)
         motivo = motivo_para_no_archivar(camara, imagen, cfg, almacen)
         if motivo is not None:
             _registro.warning("no se archivo la foto: %s", motivo)
@@ -1055,12 +1142,14 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         # reclamo pueda ver las dos cosas.
         orden = ordenes.abierta
         if orden is not None:
+            elegido = diente_elegido()
+            juicio = elegido.juicio if elegido is not None else estado.juicio
             opinion = ""
-            if estado.juicio is not None and estado.juicio.decidio:
-                opinion = f" (la memoria decia {estado.juicio.concepto})"
+            if juicio is not None and juicio.decidio:
+                opinion = f" (la memoria decia {juicio.concepto})"
             diente = orden.anotar(
                 estado=destino,
-                parecido=estado.juicio.parecido if estado.juicio is not None else None,
+                parecido=juicio.parecido if juicio is not None else None,
                 aprobado=destino not in cfg.clases_defecto,
                 origen=f"lo archivo el operario{opinion}",
                 foto=ruta.name,
@@ -1177,15 +1266,14 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 ):
                     juzgado = estado.congelado
                     estado.juicio = None
-                    if memoria is not None and memoria.lista_para_juzgar(
-                        cfg.memoria.minimo_por_concepto
-                    ):
-                        estado.juicio = memoria.juzgar(
-                            a_mostrar,
-                            parecido_minimo=cfg.memoria.parecido_minimo,
-                            confianza_minima=cfg.memoria.confianza_minima,
-                            minimo_por_concepto=cfg.memoria.minimo_por_concepto,
-                        )
+                    estado.dientes = _analizar_dientes(
+                        a_mostrar, memoria, cfg, referencia, ejemplos
+                    )
+                    # Con UN solo diente --lo normal-- el cartel grande sigue siendo el de
+                    # siempre, con lo que ese diente dio. Con varios, cada uno tiene lo
+                    # suyo sobre su recuadro y el cartel pasa a ser el resumen.
+                    if len(estado.dientes) == 1:
+                        estado.juicio = estado.dientes[0].juicio
                     estado.parecido = revision.parecido(a_mostrar, referencia)
             estado.referencia_faltante = referencia is None
             estado.nombre_referencia = galeria.nombre_actual
@@ -1249,6 +1337,15 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 accion = "conceptos"
             elif tecla == ord("o"):
                 accion = "orden"
+            elif tecla in _TECLAS_DIGITO and len(estado.dientes) > 1:
+                # Con varios dientes a la vista hay que decir cual se archiva: marcar los
+                # dos con el mismo estado de un saque seria etiquetar mal el que no se
+                # miro, y una foto mal etiquetada no se nota hasta que el modelo sale raro.
+                indice = _TECLAS_DIGITO[tecla] - 1
+                if indice < len(estado.dientes):
+                    for numero, diente in enumerate(estado.dientes):
+                        diente.elegido = numero == indice
+                continue
 
             if accion is None:
                 continue

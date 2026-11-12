@@ -307,3 +307,87 @@ def test_sin_orden_abierta_todo_sigue_funcionando(taller: Path, monkeypatch) -> 
 
     assert len(_fotos(taller, "aprobada")) == 1
     assert _ordenes(taller).abierta is None
+
+
+# ---------------------------------------------------------------------------
+# El analisis POR DIENTE, de punta a punta
+# ---------------------------------------------------------------------------
+
+
+def _dos_dientes(lado: int = 240) -> np.ndarray:
+    """Dos dientes uno al lado del otro, con la sombra del hueco en el medio."""
+    izq, der = _diente(0, lado), _diente(4, lado)
+    sombra = np.full((lado, 40, 3), 15, np.uint8)
+    return np.hstack([izq, sombra, der])
+
+
+def test_con_dos_dientes_se_archiva_uno_solo(taller: Path, monkeypatch) -> None:
+    """Marcar los dos con el mismo estado de un saque etiquetaria mal el que no se miro."""
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    assert len(_fotos(taller, "aprobada")) == 1
+
+
+def test_lo_que_se_archiva_es_el_RECORTE_del_diente(taller: Path, monkeypatch) -> None:
+    """La memoria juzga el recorte, asi que lo que se guarda tiene que ser lo mismo: si no,
+    lo que el programa aprende y lo que compara serian dos cosas distintas."""
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+    entera = _dos_dientes()
+
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    guardada = cv2.imread(str(_fotos(taller, "aprobada")[0]))
+    assert guardada.shape[1] < entera.shape[1] * 0.75
+
+
+def test_la_tecla_2_cambia_cual_diente_se_guarda(taller: Path, monkeypatch) -> None:
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+
+    _correr([_ESPACIO, ord("1"), ord("a"), ord("q")], monkeypatch)
+    primero = cv2.imread(str(_fotos(taller, "aprobada")[0]))
+    _correr([_ESPACIO, ord("2"), ord("r"), ord("q")], monkeypatch)
+    segundo = cv2.imread(str(_fotos(taller, "rechazada")[0]))
+
+    assert primero.shape != segundo.shape or not np.array_equal(primero, segundo)
+
+
+def test_con_dos_dientes_la_orden_anota_de_a_uno(taller: Path, monkeypatch) -> None:
+    from afilado.ordenes import Orden, Ordenes
+
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 6))
+
+    _correr([_ESPACIO, ord("1"), ord("a"), ord("2"), ord("r"), ord("q")], monkeypatch)
+
+    guardada = Ordenes(str(taller / "data" / "ordenes")).abierta
+    assert guardada.total_revisados == 2
+    assert guardada.sierras[0].revisados[0].estado == "aprobada"
+    assert guardada.sierras[0].revisados[1].estado == "rechazada"
+
+
+def test_con_un_diente_todo_sigue_como_antes(taller: Path, monkeypatch) -> None:
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    assert len(_fotos(taller, "aprobada")) == 1
