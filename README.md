@@ -180,12 +180,17 @@ Una foto mal etiquetada no se nota: entra al dataset, se entrena con ella, y el 
 raro sin que nadie pueda decir por que. Asi que `a` y `r` no guardan cualquier cosa. Se
 frena, con el motivo en pantalla, si:
 
-- **La camara esta congelada.** Con el microscopio desenchufado, el programa cae en la
-  camara virtual que haya instalada (DroidCam y similares) y muestra su cartel fijo. Esto ya
-  paso: ese cartel quedo archivado como sierra *aprobada*. Y **no lo atrapa un control de
-  foco**: medido sobre la foto real, el cartel da nitidez **642** --la mas alta de todo el
-  dataset, mas que cualquier diente-- porque es texto blanco nitido sobre negro. Por eso se
-  le pregunta a la camara (`Camara.congelada`), no a la imagen.
+- **La camara esta congelada.** Si el config pide un indice fijo y ese indice resulta ser
+  una camara virtual (DroidCam y similares), se abre --lo pidieron-- pero no deja archivar.
+  Esto ya paso: el cartel "Start DroidCam" quedo archivado como sierra *aprobada*. Y **no lo
+  atrapa un control de foco**: medido sobre la foto real, el cartel da nitidez **642** --la
+  mas alta de todo el dataset, mas que cualquier diente-- porque es texto blanco nitido
+  sobre negro. Por eso se le pregunta a la camara (`Camara.congelada`), no a la imagen.
+
+  > Buscando sola (`fuente: auto`, que es como viene), **una camara virtual ni siquiera se
+  > abre**: se descarta y se sigue buscando, y si no hay ninguna de verdad el programa NO
+  > arranca y dice que conecten el microscopio. Antes la abria igual "porque es mejor que
+  > nada", y mostraba un cartel fijo que parecia una camara andando. No es mejor que nada.
 - **La imagen esta movida.** El mismo diente enfocado mide 101 y con un desenfoque de 5x5
   cae a 3.7. El umbral sale de `interfaz.nitidez_minima` en el config.
 

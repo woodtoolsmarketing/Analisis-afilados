@@ -212,3 +212,126 @@ def test_un_video_nunca_queda_marcado_como_congelado(tmp_path) -> None:
         assert camara.congelada is False
     finally:
         camara.cerrar()
+
+
+# ---------------------------------------------------------------------------
+# LA CAMARA VIRTUAL NO SE USA NUNCA. DroidCam queda instalada como una camara
+# mas de Windows: siempre abre y siempre entrega el mismo cartel fijo. Antes, si
+# no respondia nada mas, el programa la abria igual "porque es mejor que nada".
+# No es mejor que nada: asi fue como el cartel "Start DroidCam" termino
+# archivado en el dataset como una sierra APROBADA.
+# ---------------------------------------------------------------------------
+
+
+class _CapturaFalsa:
+    """Una VideoCapture de mentira: puede entregar imagen viva o siempre la misma."""
+
+    def __init__(self, indice, backend=None, *, vivas: set = frozenset()) -> None:
+        import numpy as np
+
+        self.indice = indice
+        self._viva = indice in vivas
+        self._abierta = True
+        self._lecturas = 0
+        self._rng = np.random.default_rng(indice + 1)
+        self._fijo = np.full((48, 64, 3), 70, np.uint8)
+        self.liberada = False
+
+    def isOpened(self):
+        return self._abierta
+
+    def read(self):
+        import numpy as np
+
+        self._lecturas += 1
+        if not self._abierta:
+            return False, None
+        if self._viva:
+            # Un sensor real nunca repite dos frames bit a bit: siempre hay ruido.
+            return True, (self._fijo + self._rng.integers(0, 6, self._fijo.shape)).astype(np.uint8)
+        return True, self._fijo.copy()
+
+    def set(self, *_a, **_k):
+        return True
+
+    def get(self, propiedad):
+        return 64.0 if propiedad == cv2.CAP_PROP_FRAME_WIDTH else 48.0
+
+    def release(self):
+        self._abierta = False
+        self.liberada = True
+
+
+def _camaras_falsas(monkeypatch, vivas: set, presentes: set = frozenset({0, 1, 2, 3})):
+    """Hace que el sondeo encuentre exactamente estas camaras."""
+    from afilado import camara as modulo
+
+    creadas: list[_CapturaFalsa] = []
+
+    def _fabricar(indice, backend=None):
+        falsa = _CapturaFalsa(indice, backend, vivas=vivas)
+        if indice not in presentes:
+            falsa._abierta = False
+        creadas.append(falsa)
+        return falsa
+
+    monkeypatch.setattr(modulo.cv2, "VideoCapture", _fabricar)
+    monkeypatch.setattr(modulo, "_ESPERA_REINTENTO", 0.0)
+    monkeypatch.setattr(modulo, "_PAUSA_ENTRE_SONDEOS", 0.0)
+    return creadas
+
+
+def test_si_lo_unico_que_responde_es_virtual_el_programa_no_arranca(monkeypatch) -> None:
+    """El caso del taller: microscopio desenchufado, DroidCam contestando."""
+    _camaras_falsas(monkeypatch, vivas=set(), presentes={1})
+    camara = Camara(CamaraConfig(fuente="auto"))
+
+    with pytest.raises(RuntimeError) as error:
+        camara.abrir()
+
+    mensaje = str(error.value)
+    assert "MICROSCOPIO NO ESTA" in mensaje
+    assert "virtual" in mensaje
+    assert "DroidCam" in mensaje          # como sacarla de la maquina
+    assert not camara.abierta
+
+
+def test_entre_una_virtual_y_la_de_verdad_se_elige_la_de_verdad(monkeypatch) -> None:
+    _camaras_falsas(monkeypatch, vivas={2}, presentes={0, 2})
+    camara = Camara(CamaraConfig(fuente="auto"))
+
+    camara.abrir()
+    try:
+        assert camara.abierta
+        assert camara.congelada is False
+        assert camara.leer() is not None
+    finally:
+        camara.cerrar()
+
+
+def test_la_virtual_no_queda_abierta_despues_de_descartarla(monkeypatch) -> None:
+    """Dejarla tomada impediria que otro programa la use, y encima se nota como una
+    camara encendida en la barra de Windows."""
+    creadas = _camaras_falsas(monkeypatch, vivas={2}, presentes={0, 2})
+    camara = Camara(CamaraConfig(fuente="auto"))
+
+    camara.abrir()
+    try:
+        descartadas = [c for c in creadas if c.indice == 0]
+        assert descartadas and all(c.liberada for c in descartadas)
+    finally:
+        camara.cerrar()
+
+
+def test_un_indice_fijo_virtual_se_abre_pero_queda_marcado(monkeypatch) -> None:
+    """Si alguien pide ese indice a proposito, manda lo que pidio. Pero el programa sabe
+    que lo que entrega no es una sierra y no va a dejar archivar fotos."""
+    _camaras_falsas(monkeypatch, vivas=set(), presentes={1})
+    camara = Camara(CamaraConfig(fuente=1))
+
+    camara.abrir()
+    try:
+        assert camara.abierta
+        assert camara.congelada is True
+    finally:
+        camara.cerrar()

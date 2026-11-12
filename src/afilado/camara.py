@@ -259,10 +259,14 @@ class Camara:
         self._silencioso = False
         self._avisos_guardados: list[tuple[str, tuple]] = []
         self._informes_guardados: list[tuple[str, tuple]] = []
-        # True si hubo que caer en una camara que entrega SIEMPRE la misma imagen. Se abre
-        # igual --es mejor que nada y deja ver que el programa arranco-- pero lo que entrega
-        # no es una sierra, y quien archive fotos tiene que enterarse.
+        # True si la camara entrega SIEMPRE la misma imagen. Buscando sola, una asi se
+        # descarta y no se abre nunca; esto solo puede quedar en True cuando el config pide
+        # un indice fijo y ese indice resulta ser una camara virtual. Entonces se abre
+        # --lo pidieron-- pero no se deja archivar: lo que entrega no es una sierra.
         self._congelada = False
+        # Los indices que resultaron ser camaras virtuales en esta busqueda. Sirven para
+        # que el mensaje de error diga lo que de verdad paso.
+        self._vistas_congeladas: list[int] = []
 
     def _configurar(self, captura: cv2.VideoCapture, silencioso: bool = False) -> None:
         """Aplica formato, enfoque, exposicion, brillo y ganancia a una captura recien
@@ -357,13 +361,23 @@ class Camara:
         raise RuntimeError(self._mensaje_no_abre())
 
     def _intentar_abrir(self) -> Optional[cv2.VideoCapture]:
-        """Una pasada por los candidatos, prefiriendo los que tengan IMAGEN VIVA.
+        """Una pasada por los candidatos. SOLO sirve una camara con IMAGEN VIVA.
 
-        Una camara virtual --DroidCam sin telefono es el caso de esta PC-- ocupa el indice
-        mas bajo, siempre abre y siempre entrega frames, todos iguales. Quedarse con la
-        primera que "funcione" significaba elegir siempre esa y nunca el microscopio. Si al
-        final no hay ninguna viva se usa la congelada igual, porque es mejor que nada y el
-        log explica que paso.
+        Una camara virtual --DroidCam sin telefono es el caso de esta PC-- queda instalada
+        como una camara mas de Windows: siempre abre y siempre entrega frames, todos
+        iguales, con su cartel fijo. Quedarse con la primera que "funcione" significaba
+        elegir esa y nunca el microscopio.
+
+        UNA IMAGEN CONGELADA YA NO SE USA NUNCA, ni como ultimo recurso. Antes, si no
+        respondia nada mas, se la abria igual "porque es mejor que nada". No es mejor que
+        nada: es peor. El programa arrancaba mostrando un cartel que parecia una camara
+        andando, y asi fue como el "Start DroidCam" termino archivado en el dataset como
+        una sierra APROBADA. Ahora no abre y dice que conecten el microscopio, que es lo
+        unico que el operario puede hacer al respecto.
+
+        Con un indice FIJO en el config se respeta lo que pidieron --si alguien quiere
+        mirar una camara virtual a proposito, es su decision-- pero queda marcada como
+        congelada, y entonces no deja archivar fotos.
 
         Se lee un frame de prueba a proposito: isOpened() devuelve True con backends que
         despues no entregan nada, y en ese caso el bucle en vivo arrancaria para morirse
@@ -371,7 +385,7 @@ class Camara:
         revisar el cable cuando el problema era el backend.
         """
         pedido = (self._fuente, self._backend)
-        congelada: Optional[tuple[int, int]] = None
+        self._vistas_congeladas = []
         # Si un indice resulto congelado, no se lo prueba con los otros backends: una
         # camara virtual lo es por cualquier camino, y repetir el aviso en el log hace
         # parecer que el programa esta trabado.
@@ -406,20 +420,30 @@ class Camara:
                     if exito and frame is not None:
                         break
                 if exito and frame is not None:
-                    if self._auto and not _hay_senal_viva(captura, frame):
-                        # Imagen congelada: casi seguro una camara virtual. Se guarda por
-                        # si no hay nada mejor, pero se sigue buscando.
-                        _log.info(
-                            "el indice %d entrega una imagen congelada (parece una camara "
-                            "virtual); se sigue buscando",
+                    if not _hay_senal_viva(captura, frame):
+                        if self._auto:
+                            # Imagen congelada: casi seguro una camara virtual. Se descarta
+                            # y se sigue buscando. No se la guarda para despues: no se usa.
+                            _log.info(
+                                "el indice %d entrega una imagen congelada (es una camara "
+                                "virtual, no una camara de verdad); se descarta",
+                                indice,
+                            )
+                            indices_congelados.add(indice)
+                            if indice not in self._vistas_congeladas:
+                                self._vistas_congeladas.append(indice)
+                            captura.release()
+                            time.sleep(_PAUSA_ENTRE_SONDEOS)
+                            continue
+                        # Indice fijo en el config: manda lo que pidieron, pero queda
+                        # marcada y el programa no va a dejar archivar fotos de ahi.
+                        _log.warning(
+                            "el indice %d --el que pide el config-- entrega una imagen "
+                            "congelada. Se usa igual porque se pidio explicitamente, pero "
+                            "no se van a poder archivar fotos.",
                             indice,
                         )
-                        indices_congelados.add(indice)
-                        if congelada is None:
-                            congelada = (indice, backend)
-                        captura.release()
-                        time.sleep(_PAUSA_ENTRE_SONDEOS)
-                        continue
+                        self._congelada = True
                     if (indice, backend) != pedido:
                         _log.info(
                             "camara encontrada en el indice %d con el backend %s "
@@ -435,25 +459,6 @@ class Camara:
                     return captura
             captura.release()
 
-        if congelada is not None:
-            indice, backend = congelada
-            _log.warning(
-                "la unica camara que responde es el indice %d y entrega una imagen "
-                "congelada. Si tenes una camara virtual instalada (DroidCam y similares), "
-                "la real puede estar desenchufada o tomada por otro programa.",
-                indice,
-            )
-            captura = cv2.VideoCapture(indice, backend)
-            if captura.isOpened():
-                if self._es_camara:
-                    self._configurar(captura)
-                for _ in range(_INTENTOS_LECTURA_SONDEO):
-                    exito, frame = captura.read()
-                    if exito and frame is not None:
-                        self._fuente, self._backend = indice, backend
-                        self._congelada = True
-                        return captura
-            captura.release()
         return None
 
     def abrir(self) -> None:
@@ -489,6 +494,22 @@ class Camara:
     def _mensaje_no_abre(self) -> str:
         nombre_backend = _NOMBRES_BACKEND.get(self._backend, str(self._backend))
         if self._es_camara:
+            # LO PRIMERO: si lo unico que contesto fue una camara virtual, decirlo con
+            # todas las letras. Mandar a "revisar el cable" cuando el problema es que el
+            # microscopio no esta enchufado y lo que contesta es DroidCam hace perder la
+            # tarde buscando donde no es.
+            if self._vistas_congeladas:
+                indices = ", ".join(str(i) for i in self._vistas_congeladas)
+                return (
+                    "EL MICROSCOPIO NO ESTA. Lo unico que contesto fue una camara virtual "
+                    f"(indice {indices}): entrega siempre la misma imagen fija, asi que no "
+                    "sirve para mirar un diente y el programa no la usa.\n"
+                    "  - Enchufa el microscopio y abri el programa de nuevo.\n"
+                    "  - Si el microscopio esta enchufado, fijate que no lo tenga tomado "
+                    "otro programa (Zoom, Teams, la app de Camara de Windows).\n"
+                    "  - Para que la virtual deje de aparecer: Configuracion de Windows > "
+                    "Aplicaciones > DroidCam > Desinstalar."
+                )
             # Antes de rendirse, mirar que hay: si el operario puso el indice equivocado,
             # decirle cual es el bueno vale mas que mandarlo a revisar el cable.
             otras = enumerar_camaras()
