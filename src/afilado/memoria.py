@@ -48,11 +48,25 @@ sea que cada una ve algo que la otra no. Se promedian mitad y mitad porque no ha
 justificar inclinar la balanza: ninguna medicion de este taller dice todavia cual de las
 dos separa mejor un filo sano de uno gastado.
 
-LO QUE NO HACE
---------------
-No corrige rotacion: si la pieza se apoya girada mas de unos pocos grados, el parecido
-baja aunque sea el mismo diente. Buscar tambien el angulo multiplicaria el costo por la
-cantidad de angulos probados. Si en el taller pasa seguido, se mide y se decide.
+LO QUE NO HACE: CORREGIR ROTACION
+---------------------------------
+Si la pieza se apoya girada, el parecido baja aunque sea el mismo diente. Buscar tambien el
+angulo multiplicaria el costo por la cantidad de angulos probados. Esta medido sobre las 19
+fotos del taller, volviendo a juzgar cada una despues de perturbarla como pasa de verdad al
+reapoyar la pieza (el veredicto se mantiene en):
+
+    quieta (control)      19 de 19      mas luz (+25%)        19 de 19
+    corrida 10 px         19 de 19      menos luz (-25%)      19 de 19
+    corrida 25 px         19 de 19      girada 3 grados       17 de 19
+    corrida 50 px         19 de 19      girada 7 grados       16 de 19
+                                        girada 15 grados      10 de 19
+
+    reapoyada de verdad (14 px + 4 grados + 12% de luz):      17 de 19
+
+O sea: correrla y la luz NO mueven el veredicto; girarla SI. La recomendacion practica para
+el taller --apoyar la pieza siempre con la misma orientacion-- sale de aca, y no de una
+suposicion. Si algun dia hace falta, el lugar donde agregar busqueda de angulo es
+alineado(), y tests/test_estabilidad.py es la prueba que tendria que cambiar.
 
 LA MEMORIA SE MIDE A SI MISMA
 -----------------------------

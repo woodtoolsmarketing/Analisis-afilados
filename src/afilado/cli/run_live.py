@@ -432,8 +432,14 @@ def _panel_nuevo(accion, tecla, pan, conceptos, refrescar) -> tuple[bool, Option
 
 
 def _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar):
+    """La confirmacion de borrado. ENTER NO alcanza, a proposito.
+
+    En la lista ENTER es "guardar aca", la tecla que el operario aprieta todo el dia. Si
+    aca tambien confirmara, un 'b' de mas seguido del ENTER de siempre se llevaria puesto
+    un concepto entero. Hay que decir que si: el boton, o la 's'.
+    """
     elegido = pan.concepto_elegido
-    if accion == "confirmar_borrado" or tecla in (ord("s"), 13):
+    if accion == "confirmar_borrado" or tecla == ord("s"):
         if elegido is None:
             pan.modo = panel.MODO_LISTA
             return True, None
@@ -868,6 +874,14 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     def archivar(destino: str, imagen: np.ndarray) -> str:
         """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
         if destino == _DESTINO_MODELO:
+            # La foto de modelo no pasa por el filtro de nitidez --el operario elige a ojo
+            # cual quiere de referencia, y una un poco movida puede servirle-- pero SI por
+            # el de camara congelada: con el microscopio desenchufado, lo que se guardaria
+            # como "modelo" es el cartel de DroidCam, y entonces todo lo que venga despues
+            # se compara contra un cartel.
+            if getattr(camara, "congelada", False):
+                _registro.warning("no se guardo la foto de modelo: la camara esta congelada")
+                return "CAMARA CONGELADA - conecte el microscopio"
             ruta = galeria.agregar(imagen)
             galeria.recargar(preferida=ruta.name)
             miniaturas.olvidar()

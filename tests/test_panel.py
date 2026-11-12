@@ -402,3 +402,70 @@ def test_volver_de_las_fotos_no_cierra_el_panel(taller) -> None:
     sigue, _ = _manejar(pan, conceptos, galeria, tecla=_ESC)
 
     assert sigue is True and pan.modo == panel.MODO_LISTA
+
+
+# ---------------------------------------------------------------------------
+# Lo que se arreglo despues de la primera version
+# ---------------------------------------------------------------------------
+
+
+def _muchos(cantidad: int) -> list[Concepto]:
+    return [
+        Concepto(nombre=f"concepto_{i:02d}", carpeta=Path("."), fotos=i)
+        for i in range(cantidad)
+    ]
+
+
+def test_con_mas_conceptos_que_filas_el_elegido_igual_se_ve() -> None:
+    """Antes se dibujaban los que entraban y el resto se anunciaba con '...y 12 mas': los
+    que no se veian no se podian elegir ni con el mouse ni con las teclas."""
+    estado = panel.EstadoPanel(conceptos=_muchos(25), elegido=24)
+
+    pantalla = panel.componer(estado, _ALTO)
+
+    assert "elegir:24" in pantalla.botones
+    # Y el primero quedo fuera de la vista, que es justamente para lo que se corrio.
+    assert "elegir:0" not in pantalla.botones
+
+
+def test_al_principio_de_la_lista_no_se_corre_nada() -> None:
+    estado = panel.EstadoPanel(conceptos=_muchos(25), elegido=0)
+
+    pantalla = panel.componer(estado, _ALTO)
+
+    assert "elegir:0" in pantalla.botones
+
+
+def test_moverse_con_s_llega_al_ultimo(taller) -> None:
+    conceptos, galeria = taller
+    pan = _estado(conceptos, galeria)
+    pan.conceptos = _muchos(25)
+
+    for _ in range(24):
+        _manejar(pan, conceptos, galeria, tecla=ord("s"))
+
+    assert pan.elegido == 24
+    assert "elegir:24" in panel.componer(pan, _ALTO).botones
+
+
+def test_enter_no_confirma_el_borrado_de_un_concepto(taller) -> None:
+    """ENTER es 'guardar aca' en la lista. Si tambien confirmara aca, un 'b' de mas
+    seguido del ENTER de siempre se llevaria puesto un concepto entero."""
+    conceptos, galeria = taller
+    pan = _estado(conceptos, galeria, elegido=1, modo=panel.MODO_BORRAR)
+    nombre = pan.conceptos[1].nombre
+
+    _manejar(pan, conceptos, galeria, tecla=_ENTER)
+
+    assert nombre in conceptos.nombres()
+    assert pan.modo == panel.MODO_BORRAR
+
+
+def test_la_s_si_confirma_el_borrado(taller) -> None:
+    conceptos, galeria = taller
+    pan = _estado(conceptos, galeria, elegido=1, modo=panel.MODO_BORRAR)
+    nombre = pan.conceptos[1].nombre
+
+    _manejar(pan, conceptos, galeria, tecla=ord("s"))
+
+    assert nombre not in conceptos.nombres()

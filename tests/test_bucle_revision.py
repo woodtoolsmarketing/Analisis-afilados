@@ -205,3 +205,21 @@ def test_no_se_archiva_dos_veces_la_misma_foto_congelada(taller: Path, monkeypat
     _correr([_ESPACIO, ord("a"), ord("a"), ord("a"), ord("q")], monkeypatch)
 
     assert len(_fotos(taller, "aprobada")) == 1
+
+
+def test_con_la_camara_congelada_no_entra_ni_una_foto_de_modelo(
+    taller: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con el microscopio desenchufado el programa cae en DroidCam, que muestra un cartel
+    fijo. Ese cartel ya entro una vez al dataset como sierra APROBADA; si entrara como
+    foto de MODELO seria peor todavia, porque todo lo que venga despues se compara contra
+    el."""
+    class _Congelada(_CamaraFalsa):
+        congelada = True
+
+    monkeypatch.setattr(run_live, "Camara", _Congelada)
+
+    _correr([ord("f"), _ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    assert not list((taller / "data" / "referencia").rglob("*.jpg"))
+    assert _fotos(taller, "aprobada") == []

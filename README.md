@@ -557,6 +557,23 @@ mejores candidatas de cada concepto-- y abrir el programa con todas esas fotos y
 tarda 51 ms. La cache vive en `data/memoria/` y se puede borrar sin perder nada: se rehace
 sola leyendo las fotos.
 
+> **APOYAR LA PIEZA SIEMPRE CON LA MISMA ORIENTACION.** Es la unica recomendacion de uso que
+> hace falta, y sale de una medicion, no de una corazonada. Volviendo a juzgar las 19 fotos
+> del taller despues de perturbarlas como pasa de verdad al reapoyar la pieza, el veredicto
+> se mantiene en:
+>
+> | perturbacion | se mantiene | | perturbacion | se mantiene |
+> |---|---|---|---|---|
+> | quieta (control) | 19 de 19 | | mas luz (+25%) | 19 de 19 |
+> | corrida 10 px | 19 de 19 | | menos luz (-25%) | 19 de 19 |
+> | corrida 25 px | 19 de 19 | | girada 3 grados | 17 de 19 |
+> | corrida 50 px | 19 de 19 | | girada 7 grados | 16 de 19 |
+> | | | | girada 15 grados | **10 de 19** |
+>
+> O sea: **correrla y la luz no mueven el veredicto; girarla si.** El programa normaliza la
+> luz y busca el mejor calce para el encuadre, pero no prueba angulos --costaria una
+> comparacion por cada angulo-- asi que una pieza bien girada se le vuelve otra pieza.
+
 #### El panel de CONCEPTOS (tecla `c`)
 
 Un **concepto** es una carpeta de fotos que significan lo mismo: `aprobada`, `rechazada`,

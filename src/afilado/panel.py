@@ -243,12 +243,20 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
                            _VERDE_OK, 24, True))
 
     y = _ALTO_CABECERA
-    tope = alto - _ALTO_BOTONES - _MARGEN
-    for indice, concepto in enumerate(estado.conceptos):
-        if y + _ALTO_FILA > tope:
-            lineas.append((f"...y {len(estado.conceptos) - indice} mas",
-                           (_MARGEN + 16, y + 8), _TEXTO_TENUE, 18, False))
-            break
+    tope = alto - _ALTO_BOTONES - _MARGEN - 30
+    caben = max(1, (tope - _ALTO_CABECERA) // _ALTO_FILA)
+
+    # LA LISTA SE CORRE PARA QUE EL ELEGIDO SIEMPRE SE VEA. Antes se dibujaban las filas que
+    # entraban y el resto se anunciaba con un "...y 12 mas": los que no se veian no se
+    # podian elegir de ninguna forma, ni con el mouse ni con las teclas, asi que un taller
+    # con muchos conceptos se quedaba sin poder usar los ultimos.
+    primera = 0
+    if len(estado.conceptos) > caben and estado.elegido >= caben:
+        primera = min(estado.elegido - caben + 1, len(estado.conceptos) - caben)
+    hay_mas = len(estado.conceptos) > caben
+
+    for posicion, concepto in enumerate(estado.conceptos[primera:primera + caben]):
+        indice = primera + posicion
         elegido = indice == estado.elegido
         _tarjeta(
             lienzo, (_MARGEN, y), (_MARGEN + ancho_lista, y + _ALTO_FILA - 8),
@@ -267,7 +275,10 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
             color_punto = _ROJO_NO if concepto.defecto else _VERDE_OK
             cv2.circle(lienzo, (_MARGEN + 26, y + 23), 9, color_punto, -1, cv2.LINE_AA)
 
-        lineas.append((f"{indice + 1}", (_MARGEN + 44, y + 12), _TEXTO_TENUE, 17, False))
+        # El numero solo se dibuja si tiene tecla: del decimo en adelante no hay digito que
+        # lo alcance y un numero sin tecla es una promesa que no se cumple.
+        if indice < 9:
+            lineas.append((f"{indice + 1}", (_MARGEN + 44, y + 12), _TEXTO_TENUE, 17, False))
         lineas.append((concepto.nombre, (_MARGEN + 68, y + 8), _TEXTO, 24, True))
         lineas.append((_texto_aciertos(estado, concepto),
                        (_MARGEN + 68 + 300, y + 13), _TEXTO_TENUE, 18, False))
@@ -286,11 +297,11 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
 
     # Todo lo que hay en los botones tiene tecla, y la tecla se dice. En el taller el
     # mouse esta siempre con aserrin y el operario termina usando el teclado.
-    lineas.append((
-        "teclas:   1-9 elegir   ENTER guardar aca   n nuevo   v ver fotos   "
-        "b borrar   ESC volver",
-        (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False,
-    ))
+    teclas = ("teclas:   1-9 elegir   ENTER guardar aca   n nuevo   v ver fotos   "
+              "b borrar   ESC volver")
+    if hay_mas:
+        teclas += f"   |   {estado.elegido + 1} de {len(estado.conceptos)}, w y s para moverse"
+    lineas.append((teclas, (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False))
 
     definiciones = []
     if estado.pendiente is not None and estado.conceptos:
