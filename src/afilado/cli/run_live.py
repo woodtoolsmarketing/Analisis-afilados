@@ -258,11 +258,21 @@ def _clases_de_teclas(cfg: AppConfig) -> dict[int, str]:
     """Mapea 'a' a la primera clase sana y 'r' a la primera clase de defecto.
 
     Con el esquema binario aprobada/rechazada esto queda a=aprobada, r=rechazada.
+
+    UNA TECLA SIN DESTINO NO HACE NADA. Antes, si no habia ninguna clase sana, la 'a' caia
+    en cfg.clases[0] --que podia ser un concepto de RECHAZO-- y el operario que apretaba
+    GUARDAR BUENA archivaba la foto como mala sin enterarse. Una foto mal etiquetada no se
+    nota: entra al dataset, se entrena con ella y el modelo sale raro meses despues. Mejor
+    que la tecla no haga nada, igual que el boton que ya desaparecio de la barra.
     """
     sanas = [c for c in cfg.clases if c not in cfg.clases_defecto]
-    clase_sana = sanas[0] if sanas else cfg.clases[0]
-    clase_defecto = cfg.clases_defecto[0] if cfg.clases_defecto else cfg.clases[-1]
-    return {ord("a"): clase_sana, ord("r"): clase_defecto}
+    defectuosas = [c for c in cfg.clases if c in cfg.clases_defecto]
+    teclas: dict[int, str] = {}
+    if sanas:
+        teclas[ord("a")] = sanas[0]
+    if defectuosas:
+        teclas[ord("r")] = defectuosas[0]
+    return teclas
 
 
 # Etiquetas de taller para los dos conceptos de siempre. "GUARDAR BUENA" se lee de un
@@ -280,10 +290,12 @@ def _volcar_conceptos(cfg: AppConfig, conceptos: Conceptos) -> None:
     y en el panel, que es donde el operario la puede cambiar.
     """
     nombres = conceptos.nombres()
-    if not nombres:
-        # Sin carpetas todavia se respeta el config: el programa necesita al menos una
-        # clase para poder archivar algo.
+    if not nombres and not conceptos.hubo_indice:
+        # Primer arranque, sin nada en disco: se respeta el config, que es la semilla.
         return
+    # Pero si el operario BORRO todos los conceptos, la lista vacia es la verdad: dejar la
+    # del config haria aparecer botones y teclas de conceptos que ya no existen, y
+    # apretarlos los resucitaria con una carpeta nueva.
     cfg.clases = nombres
     cfg.clases_defecto = [n for n in conceptos.defectos() if n in nombres]
 
@@ -352,14 +364,38 @@ def _atender_panel(
         return _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar)
     if pan.modo == panel.MODO_FOTOS:
         return _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar)
-    return _panel_lista(accion, tecla, pan, conceptos, galeria, miniaturas, archivar)
+    return _panel_lista(accion, tecla, pan, conceptos, galeria, miniaturas, archivar, refrescar)
 
 
 def _panel_lista(
-    accion, tecla, pan, conceptos, galeria, miniaturas, archivar
+    accion, tecla, pan, conceptos, galeria, miniaturas, archivar, refrescar
 ) -> tuple[bool, Optional[str]]:
     if accion == "volver" or tecla in (_ESC, ord("q")):
         return False, None
+
+    # El punto de color: si este concepto significa "pieza para tirar". Es lo que decide si
+    # la pantalla pinta verde o rojo cuando la memoria lo elige.
+    if accion is not None and accion.startswith("defecto:"):
+        pan.elegido = int(accion.split(":", 1)[1])
+        tecla = ord("d")
+    if tecla == ord("d"):
+        elegido = pan.concepto_elegido
+        if elegido is None or elegido.especial:
+            pan.aviso = "'foto de modelo' no es un concepto: no es ni bueno ni malo"
+            return True, None
+        try:
+            conceptos.marcar_defecto(elegido.nombre, not elegido.defecto)
+        except (ValueError, OSError) as error:
+            _registro.error("no se pudo marcar '%s': %s", elegido.nombre, error)
+            pan.aviso = "no se pudo guardar el cambio; revise el disco"
+            return True, None
+        refrescar(recalcular=False)
+        ahora = pan.concepto_elegido
+        es_malo = ahora.defecto if ahora is not None else not elegido.defecto
+        return True, (
+            f"'{elegido.nombre}' es una pieza PARA TIRAR" if es_malo
+            else f"'{elegido.nombre}' es una pieza BUENA"
+        )
 
     if accion is not None and accion.startswith("elegir:"):
         pan.elegido = int(accion.split(":", 1)[1])
@@ -468,7 +504,9 @@ def _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar):
     paginas = max(1, (len(pan.fotos) + panel._POR_PAGINA - 1) // panel._POR_PAGINA)
     if accion is not None and accion.startswith("foto:"):
         pan.foto_elegida = int(accion.split(":", 1)[1])
-    elif tecla in _TECLAS_DIGITO:
+    elif tecla in _TECLAS_DIGITO and _TECLAS_DIGITO[tecla] <= panel._POR_PAGINA:
+        # Solo los digitos de ESTA pagina. En pantalla hay ocho miniaturas; el 9 elegia una
+        # que no se ve, y la 'b' siguiente la mandaba a la papelera a ciegas.
         indice = pan.pagina * panel._POR_PAGINA + _TECLAS_DIGITO[tecla] - 1
         if indice < len(pan.fotos):
             pan.foto_elegida = indice
@@ -867,9 +905,9 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             )
             pan.elegido = max(0, min(pan.elegido, len(pan.conceptos) - 1))
             pan.resumen = estado.resumen_memoria
-            pan.aciertos = (
-                memoria.autoevaluacion().por_concepto if memoria is not None else {}
-            )
+            auto = memoria.autoevaluacion() if memoria is not None else None
+            pan.aciertos = auto.por_concepto if auto is not None else {}
+            pan.recortada = bool(auto.recortada) if auto is not None else False
 
     def archivar(destino: str, imagen: np.ndarray) -> str:
         """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
@@ -908,6 +946,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     en_vivo = bool(cfg.interfaz.evaluar_en_vivo)
     cada_n_frames = cfg.detector.clasificar_cada_n_frames
     frames_vistos = 0
+    # La imagen congelada se juzga una sola vez, al congelarla; ver mas abajo.
+    juzgado = False
     clase_candidata: Optional[str] = None
     repeticiones = 0
     vivo: Optional[np.ndarray] = None
@@ -976,8 +1016,17 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             # contra todas las fotos archivadas; si todavia no le alcanza, el parecido
             # contra la unica foto de modelo que este elegida. Las dos cuestan unos ms y se
             # respeta cada_n_frames: no hay razon para gastarlo en cada cuadro.
+            #
+            # LA IMAGEN CONGELADA SE JUZGA UNA SOLA VEZ, y esto no es una optimizacion: es
+            # correctitud. Antes se volvia a juzgar en cada cuadro, asi que en cuanto el
+            # operario apretaba GUARDAR, esa misma foto entraba a la memoria y el cuadro
+            # siguiente la encontraba ahi: el cartel pasaba a decir 100% del concepto que
+            # el operario acababa de elegir. El programa se daba la razon a si mismo.
             if clasificador is None and not estado.esperando_foco and pan is None:
-                if estado.congelado or frames_vistos % cada_n_frames == 0:
+                if (estado.congelado and not juzgado) or (
+                    not estado.congelado and frames_vistos % cada_n_frames == 0
+                ):
+                    juzgado = estado.congelado
                     estado.juicio = None
                     if memoria is not None and memoria.lista_para_juzgar(
                         cfg.memoria.minimo_por_concepto
@@ -1025,6 +1074,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 if mensaje is not None:
                     estado.mensaje = mensaje
                     expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+                    if sigue:
+                        # El panel no dibuja estado.mensaje: si se queda abierto --borrar
+                        # una foto, crear un concepto-- la unica forma de que el operario
+                        # vea que paso es el aviso del propio panel.
+                        pan.aviso = mensaje
                 if not sigue:
                     pan = None
                     miniaturas.olvidar()
@@ -1055,12 +1109,16 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     aciertos=(
                         memoria.autoevaluacion().por_concepto if memoria is not None else {}
                     ),
+                    recortada=(
+                        memoria.autoevaluacion().recortada if memoria is not None else False
+                    ),
                 )
                 continue
 
             if accion == "revisar":
                 congelado = vivo.copy()
                 estado.congelado = True
+                juzgado = False
                 estado.esperando_foco = False
                 # En vivo ya hay un veredicto confirmado para esta imagen: se congela ese,
                 # en vez de volver a clasificar y arriesgar que salga otro distinto justo
@@ -1071,6 +1129,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     )
             elif accion == "seguir":
                 estado.congelado = False
+                juzgado = False
                 estado.veredicto = None
                 estado.nitidez = None
                 estado.esperando_foco = False

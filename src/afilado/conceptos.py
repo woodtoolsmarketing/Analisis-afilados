@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -65,11 +66,17 @@ def caracter_valido(letra: str) -> bool:
 
 
 def sanear(nombre: str) -> str:
-    """Deja un nombre de concepto usable como carpeta. Devuelve "" si no queda nada."""
+    """Deja un nombre de concepto usable como carpeta. Devuelve "" si no queda nada.
+
+    SE RECORTA ANTES DE LIMPIAR LOS BORDES, no al reves: al reves, un nombre largo que
+    quedaba cortado justo en un guion bajo daba un resultado que volvia a cambiar si se lo
+    saneaba de nuevo. Que sanear(sanear(x)) == sanear(x) importa porque hay dos caminos que
+    lo aplican --el nombre que se teclea y el que se lee del indice-- y si no coincidieran,
+    dos conceptos distintos podrian terminar apuntando a la misma carpeta.
+    """
     limpio = "".join(c if c in _VALIDOS else "_" for c in nombre)
     limpio = "_".join(limpio.split())          # espacios -> un solo guion bajo
-    limpio = limpio.strip("_-")[:LARGO_MAXIMO]
-    return limpio
+    return limpio[:LARGO_MAXIMO].strip("_-")
 
 
 @dataclass
@@ -118,6 +125,15 @@ class Conceptos:
     def carpeta(self) -> Path:
         return self._base
 
+    @property
+    def hubo_indice(self) -> bool:
+        """Si ya existe el archivo de conceptos, o sea si esta carpeta se uso alguna vez.
+
+        Sirve para distinguir "recien instalado" --donde la lista del config es la
+        semilla-- de "el operario los borro a todos", donde la lista vacia es la verdad.
+        """
+        return (self._base / _ARCHIVO_INDICE).is_file()
+
     def listar(self) -> list[Concepto]:
         return list(self._lista)
 
@@ -127,8 +143,31 @@ class Conceptos:
     def defectos(self) -> list[str]:
         return [c.nombre for c in self._lista if c.defecto]
 
+    def _resolver(self, nombre: str) -> Optional[str]:
+        """El nombre TAL COMO ESTA EN DISCO, o None si no hay ninguno asi.
+
+        No alcanza con sanear() para encontrar la carpeta de un concepto: una carpeta que
+        alguien copio con el Explorador puede llamarse "filo-" o tener una letra con
+        acento, y sanear le saca el guion del final o le cambia la letra. Buscarla por el
+        nombre saneado
+        apuntaba entonces a una carpeta que no existe --y borrar con ese nombre llegaba a
+        mover la carpeta equivocada--. Primero se busca tal cual, despues saneado, y por
+        ultimo sin distinguir mayusculas, que es como las compara Windows.
+        """
+        actuales = {c.nombre for c in self._lista}
+        if nombre in actuales:
+            return nombre
+        limpio = sanear(nombre)
+        if limpio in actuales:
+            return limpio
+        plegados = {nombre.casefold(), limpio.casefold()}
+        for actual in sorted(actuales):
+            if actual.casefold() in plegados:
+                return actual
+        return None
+
     def existe(self, nombre: str) -> bool:
-        return sanear(nombre) in {c.nombre for c in self._lista}
+        return self._resolver(nombre) is not None
 
     def con_fotos(self) -> list[Concepto]:
         return [c for c in self._lista if c.tiene_fotos]
@@ -142,7 +181,11 @@ class Conceptos:
         Mas nueva primero porque lo que el operario va a querer borrar casi siempre es lo
         que acaba de sacar: una foto movida, o una que archivo en la carpeta equivocada.
         """
-        carpeta = self._base / sanear(nombre)
+        return self._fotos_de(self._resolver(nombre) or sanear(nombre))
+
+    def _fotos_de(self, carpeta_nombre: str) -> list[Path]:
+        """Las fotos de una carpeta por su nombre EXACTO. Es lo que usa recargar()."""
+        carpeta = self._base / carpeta_nombre
         if not carpeta.is_dir():
             return []
         try:
@@ -153,7 +196,13 @@ class Conceptos:
         except OSError as error:
             _log.warning("no se pudo leer %s: %s", carpeta, error)
             return []
-        return sorted(archivos, key=lambda p: p.name, reverse=True)
+        # Por FECHA, que es lo que quiere decir "la mas nueva". Ordenar por nombre coincide
+        # mientras los archivos los ponga el programa --les pone la fecha adelante-- pero
+        # no cuando alguien copia fotos con otro nombre desde el Explorador.
+        try:
+            return sorted(archivos, key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            return sorted(archivos, key=lambda p: p.name, reverse=True)
 
     def mapa(self) -> dict[str, list[Path]]:
         """{concepto: [fotos]} para que la memoria sepa que hay que recordar."""
@@ -213,7 +262,7 @@ class Conceptos:
             Concepto(
                 nombre=nombre,
                 carpeta=self._base / nombre,
-                fotos=len(self.fotos(nombre)),
+                fotos=len(self._fotos_de(nombre)),
                 defecto=bool(datos.get("defecto", nombre in self._defectos_semilla)),
             )
             for nombre, datos in self._meta.items()
@@ -240,28 +289,42 @@ class Conceptos:
         raise OSError(f"no se pudo crear la carpeta del concepto '{limpio}'")
 
     def eliminar(self, nombre: str) -> int:
-        """Manda el concepto y sus fotos a _papelera. Devuelve cuantas fotos se movieron."""
-        limpio = sanear(nombre)
-        if not self.existe(limpio):
-            raise ValueError(f"no hay ningun concepto que se llame '{limpio}'")
-        cuantas = len(self.fotos(limpio))
-        origen = self._base / limpio
+        """Manda el concepto y sus fotos a _papelera. Devuelve cuantos archivos se movieron."""
+        real = self._resolver(nombre)
+        if real is None:
+            raise ValueError(f"no hay ningun concepto que se llame '{sanear(nombre)}'")
+        origen = self._base / real
+        # Se cuenta TODO lo que se va, no solo las fotos sueltas de la carpeta: el numero
+        # que devuelve esto es el que el panel le muestra al operario ("se fueron 12
+        # fotos"), y tiene que corresponder con lo que de verdad se movio.
+        cuantas = 0
         if origen.is_dir():
-            destino = self._papelera() / f"{limpio}_{self._sello()}"
+            cuantas = sum(
+                1 for p in origen.rglob("*")
+                if p.is_file() and p.suffix.lower() in EXTENSIONES
+            )
+            destino = self._destino_libre(self._papelera(), real, "")
             destino.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(origen), str(destino))
-            _log.info("concepto '%s' (%d fotos) movido a %s", limpio, cuantas, destino)
-        self._meta.pop(limpio, None)
+            try:
+                shutil.move(str(origen), str(destino))
+            except OSError as error:
+                # Si el movimiento quedo a medias --un archivo tomado por otro programa--
+                # se limpia lo que llego a copiarse. Peor que fallar es dejar la mitad de
+                # las fotos duplicadas y que nadie sepa cual es cual.
+                shutil.rmtree(destino, ignore_errors=True)
+                raise OSError(f"no se pudo mover '{real}' a la papelera: {error}") from error
+            _log.info("concepto '%s' (%d fotos) movido a %s", real, cuantas, destino)
+        self._meta.pop(real, None)
         self._escribir_indice()
         self.recargar()
         return cuantas
 
     def marcar_defecto(self, nombre: str, defecto: bool) -> None:
         """Dice si un concepto significa "pieza para rechazar"."""
-        limpio = sanear(nombre)
-        if not self.existe(limpio):
-            raise ValueError(f"no hay ningun concepto que se llame '{limpio}'")
-        self._meta.setdefault(limpio, {})["defecto"] = bool(defecto)
+        real = self._resolver(nombre)
+        if real is None:
+            raise ValueError(f"no hay ningun concepto que se llame '{sanear(nombre)}'")
+        self._meta.setdefault(real, {})["defecto"] = bool(defecto)
         self._escribir_indice()
         self.recargar()
 
@@ -272,8 +335,17 @@ class Conceptos:
             raise ValueError(f"no existe la foto {ruta}")
         destino_dir = self._papelera() / ruta.parent.name
         destino_dir.mkdir(parents=True, exist_ok=True)
-        destino = destino_dir / f"{ruta.stem}_{self._sello()}{ruta.suffix}"
-        shutil.move(str(ruta), str(destino))
+        destino = self._destino_libre(destino_dir, ruta.stem, ruta.suffix)
+        try:
+            shutil.move(str(ruta), str(destino))
+        except OSError as error:
+            # Todo o nada: si quedo una copia a medias en la papelera, se limpia. Dos
+            # archivos iguales y nadie sabiendo cual es el bueno es peor que un error.
+            try:
+                destino.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise OSError(f"no se pudo mover {ruta.name} a la papelera: {error}") from error
         _log.info("foto %s movida a %s", ruta.name, destino)
         self.recargar()
         return destino
@@ -281,6 +353,21 @@ class Conceptos:
     # ------------------------------------------------------------------ internos
     def _papelera(self) -> Path:
         return self._base / _PAPELERA
+
+    def _destino_libre(self, carpeta: Path, base: str, sufijo: str) -> Path:
+        """Un nombre que todavia no existe en la papelera.
+
+        El sello tiene resolucion de un segundo, y borrar dos veces el mismo concepto --o
+        dos fotos con el mismo nombre-- dentro del mismo segundo pisaba lo anterior sin
+        decir nada. La papelera existe justamente para que nada se pierda.
+        """
+        sello = self._sello()
+        destino = carpeta / f"{base}_{sello}{sufijo}"
+        repeticion = 1
+        while destino.exists():
+            destino = carpeta / f"{base}_{sello}_{repeticion}{sufijo}"
+            repeticion += 1
+        return destino
 
     @staticmethod
     def _sello() -> str:
@@ -305,22 +392,34 @@ class Conceptos:
             return {}
         meta: dict[str, dict] = {}
         for entrada in conceptos:
+            # El nombre se toma TAL CUAL se escribio: es el nombre de una carpeta que
+            # existe. Sanearlo aca hacia que dos conceptos distintos en disco --"filo" y
+            # "filo-"-- colapsaran en la misma clave del indice y uno se comiera al otro.
             if isinstance(entrada, str):
-                nombre, datos = sanear(entrada), {}
+                nombre, datos = entrada.strip(), {}
             elif isinstance(entrada, dict):
-                nombre = sanear(str(entrada.get("nombre", "")))
+                nombre = str(entrada.get("nombre", "")).strip()
                 datos = {"defecto": bool(entrada.get("defecto", False))}
             else:
                 continue
-            if nombre:
+            if nombre and not nombre.startswith(("_", ".")) and "/" not in nombre \
+                    and "\\" not in nombre:
                 meta[nombre] = datos
         return meta
 
     def _escribir_indice(self) -> None:
-        """Guarda el indice. Que falle no rompe nada: las carpetas siguen mandando."""
+        """Guarda el indice. Que falle no rompe nada: las carpetas siguen mandando.
+
+        Se escribe aparte y se lo pone en su lugar de un golpe: un corte en la mitad de la
+        escritura dejaria un JSON truncado, y lo unico que vive ahi --cual concepto cuenta
+        como defecto-- se perderia en silencio, con la pantalla pintando de verde una
+        pieza para tirar.
+        """
+        definitivo = self._base / _ARCHIVO_INDICE
+        provisorio = definitivo.with_suffix(".json.tmp")
         try:
             self._base.mkdir(parents=True, exist_ok=True)
-            (self._base / _ARCHIVO_INDICE).write_text(
+            provisorio.write_text(
                 json.dumps(
                     {
                         "conceptos": [
@@ -333,5 +432,6 @@ class Conceptos:
                 ),
                 encoding="utf-8",
             )
+            os.replace(provisorio, definitivo)
         except OSError as error:
             _log.warning("no se pudo escribir el indice de conceptos: %s", error)

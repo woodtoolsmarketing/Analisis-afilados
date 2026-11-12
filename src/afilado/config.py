@@ -165,11 +165,19 @@ class MemoriaConfig:
     # opina. Ver memoria.Autoevaluacion.confianza: el numero sale de las propias fotos del
     # taller, no de un umbral inventado.
     confianza_minima: float = 0.70
-    # Cuantas fotos de cada concepto pasan a la comparacion cara. Medido sobre las 19 fotos
-    # de microscopio: con 12 candidatas se conservan el 98% de los vecinos que habria
-    # elegido la comparacion exacta. Ese 98% se midio con 12 de 19 fotos; cuando haya
-    # cientos hay que volver a medirlo, y por eso esto es configurable.
-    candidatas_por_concepto: int = 6
+    # Cuantas fotos de cada concepto pasan a la comparacion cara. Cuanto de los vecinos que
+    # habria elegido la comparacion exacta sobrevive al filtro barato, medido sobre las 19
+    # fotos de microscopio del taller (todas en una bolsa, que es el caso mas exigente):
+    #
+    #      3 candidatas  71.9%      8 candidatas  89.5%
+    #      4 candidatas  80.7%     12 candidatas  98.2%
+    #      6 candidatas  84.2%     18 candidatas  100%
+    #
+    # Va en 12 porque el veredicto se calcula UNA vez por pieza --no en cada cuadro-- asi
+    # que la diferencia de costo (11 ms contra 6 ms con dos conceptos) no se nota, y
+    # perder uno de cada seis vecinos si se notaria. Con cientos de fotos hay que volver a
+    # medirlo: el porcentaje de arriba sale de 19.
+    candidatas_por_concepto: int = 12
     # Cuantas de esas candidatas promedian el puntaje del concepto. Con 1 --o sea, el mejor
     # suelto-- una sola foto afortunada o mal archivada decide sola.
     vecinos_por_concepto: int = 3

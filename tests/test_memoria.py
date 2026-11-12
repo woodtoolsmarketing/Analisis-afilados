@@ -295,21 +295,50 @@ def test_ninguna_foto_se_vota_a_si_misma(tmp_path: Path) -> None:
     assert auto.por_concepto["rechazada"] == (3, 4)
 
 
-def test_la_confianza_sale_de_los_casos_igual_de_ajustados() -> None:
-    auto = M.Autoevaluacion(
-        total=10,
-        aciertos=5,
-        casos=[(0.01, False), (0.02, False), (0.03, True), (0.04, False),
-               (0.05, True), (0.20, True), (0.25, True), (0.30, True),
-               (0.35, True), (0.40, False)],
-    )
+def _casos_tipicos() -> list[tuple[float, bool]]:
+    """Doce decisiones ajustadas que salieron casi todas mal, y doce comodas que salieron
+    casi todas bien. Es la forma que tiene de verdad una memoria que anda: cuando los dos
+    conceptos quedan a un pelo, se equivoca; cuando uno gana por lejos, acierta."""
+    ajustadas = [(0.01 + i * 0.004, i % 6 == 0) for i in range(12)]    # 2 de 12 bien
+    comodas = [(0.40 + i * 0.01, i % 6 != 0) for i in range(12)]       # 10 de 12 bien
+    return ajustadas + comodas
 
-    # Un margen comodo mira todos los casos: 6 de 10.
-    assert auto.confianza(1.0) == pytest.approx(0.6)
-    # Uno ajustado mira solo los ajustados, y ahi el panorama es peor.
-    assert auto.confianza(0.05, minimo_casos=5) == pytest.approx(0.4)
-    # Sin casos suficientes no se inventa un numero.
-    assert auto.confianza(0.02, minimo_casos=5) is None
+
+def test_la_confianza_sale_de_las_decisiones_parecidas_a_esta() -> None:
+    auto = M.Autoevaluacion(total=24, aciertos=12, casos=_casos_tipicos())
+
+    ajustada = auto.confianza(0.02)
+    comoda = auto.confianza(0.45)
+
+    assert ajustada is not None and comoda is not None
+    assert ajustada < 0.5 < comoda
+
+
+def test_una_decision_comoda_no_arrastra_el_acierto_de_los_empates() -> None:
+    """El error que tenia esto: filtraba los casos con margen MENOR O IGUAL al actual, asi
+    que para un margen comodo el conjunto era toda la memoria y la confianza caia al
+    acierto global. La decision mas clara del dia se rechazaba por culpa de los empates."""
+    auto = M.Autoevaluacion(total=24, aciertos=12, casos=_casos_tipicos())
+
+    acierto_global = auto.acierto
+    comoda = auto.confianza(0.45)
+
+    assert acierto_global == pytest.approx(0.5)
+    assert comoda > acierto_global
+
+
+def test_un_empate_de_verdad_no_se_escapa_sin_control() -> None:
+    """El otro lado del mismo error: para un margen chiquito quedaban dos o tres casos,
+    menos que el minimo, devolvia None y el empate pasaba sin que nadie lo controlara."""
+    auto = M.Autoevaluacion(total=24, aciertos=12, casos=_casos_tipicos())
+
+    assert auto.confianza(0.001) is not None
+
+
+def test_sin_casos_suficientes_no_se_inventa_una_confianza() -> None:
+    auto = M.Autoevaluacion(total=3, aciertos=2, casos=[(0.1, True), (0.2, True), (0.3, False)])
+
+    assert auto.confianza(0.2) is None
 
 
 def test_la_autoevaluacion_dice_si_se_midio_sobre_una_parte(tmp_path: Path) -> None:
@@ -406,3 +435,149 @@ def test_el_resumen_cuenta_lo_que_sabe(tmp_path: Path) -> None:
 
 def test_sin_fotos_el_resumen_invita_a_sacarlas(tmp_path: Path) -> None:
     assert "vacia" in _memoria(tmp_path).resumen()
+
+
+# ---------------------------------------------------------------------------
+# Lo que encontro la revision adversarial. Cada una de estas pruebas es un error
+# que el programa cometia de verdad y que se reprodujo antes de arreglarlo.
+# ---------------------------------------------------------------------------
+
+
+def test_el_porcentaje_que_se_muestra_es_del_concepto_que_se_nombra(tmp_path: Path) -> None:
+    """Llego a decir "se parece a X (100%)" cuando ese 100% era de una foto archivada en
+    OTRO concepto: el numero salia del mejor vecino de toda la memoria y la pantalla lo
+    escribia pegado al nombre del que gano. Es el tipo de numero que ya costo caro aca."""
+    base = tmp_path / "coleccion"
+    mapa = {
+        # Una foto clavada con la consulta, y dos que no tienen nada que ver.
+        "aprobada": [_guardar(base / "aprobada", "a0.jpg", _diente(0)),
+                     _guardar(base / "aprobada", "a1.jpg", _astillado(1)),
+                     _guardar(base / "aprobada", "a2.jpg", _astillado(2))],
+        # Tres parecidas entre si: gana el concepto, pero ninguna es LA mas parecida.
+        "rechazada": [_guardar(base / "rechazada", f"r{i}.jpg", _diente(i)) for i in (4, 5, 6)],
+    }
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+
+    juicio = mem.juzgar(_mas_luz(_diente(0)), minimo_por_concepto=1, confianza_minima=0.0)
+
+    assert juicio.concepto == "rechazada"
+    assert juicio.vecinos[0].concepto == "aprobada"      # el mejor de TODA la memoria
+    mejor_del_ganador = max(v.parecido for v in juicio.vecinos if v.concepto == "rechazada")
+    assert juicio.parecido == pytest.approx(mejor_del_ganador)
+    assert juicio.parecido < juicio.vecinos[0].parecido
+
+
+def test_archivar_la_primera_foto_de_un_concepto_no_da_vuelta_el_veredicto(
+    tmp_path: Path,
+) -> None:
+    """Cada concepto promediaba SUS mejores tres, o menos si no tenia tres, asi que el de
+    una sola foto puntuaba por su maximo y el de cuatro por un promedio. Medido: el mismo
+    concepto pasaba de 0.9997 con una foto a 0.6328 con tres. Entonces crear un concepto
+    nuevo y archivarle la primera foto le daba vuelta el veredicto a la pieza que se
+    estaba mirando."""
+    base = tmp_path / "coleccion"
+    mapa = _taller(tmp_path, buenas=4, malas=4)
+    consulta = _mas_luz(_diente(1))
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+    antes = mem.juzgar(consulta, minimo_por_concepto=1, confianza_minima=0.0).concepto
+    assert antes == "aprobada"
+
+    # El operario crea un concepto nuevo y le archiva UNA foto, que no es la mas parecida.
+    mapa["filo_quemado"] = [
+        _guardar(base / "filo_quemado", "q0.jpg", _reapoyar_girado(_diente(1)))
+    ]
+    mem.sincronizar(mapa)
+
+    assert mem.juzgar(consulta, minimo_por_concepto=1, confianza_minima=0.0).concepto == antes
+
+
+def _reapoyar_girado(imagen: np.ndarray, grados: float = 10.0) -> np.ndarray:
+    alto, ancho = imagen.shape[:2]
+    M_ = cv2.getRotationMatrix2D((ancho / 2, alto / 2), grados, 1.0)
+    return cv2.warpAffine(imagen, M_, (ancho, alto), borderMode=cv2.BORDER_REPLICATE)
+
+
+def test_una_foto_de_un_solo_color_no_se_parece_a_nada() -> None:
+    """Al normalizarla queda en ceros, y matchTemplate con una plantilla sin varianza
+    devuelve el maximo contra CUALQUIER imagen. Una foto negra archivada le daba a su
+    concepto un piso de 0.500 contra todo lo que entrara."""
+    _, _, plana = M.rasgos(np.full((240, 240, 3), 17, np.uint8))
+    _, _, diente = M.rasgos(_diente())
+
+    assert M.alineado(diente, plana) == 0.0
+    assert M.alineado(plana, plana) == 0.0
+
+
+def test_una_foto_negra_archivada_no_se_roba_el_veredicto(tmp_path: Path) -> None:
+    base = tmp_path / "coleccion"
+    mapa = _taller(tmp_path, buenas=5, malas=5)
+    mapa["quemado"] = [_guardar(base / "quemado", "negra.jpg",
+                                np.zeros((240, 240, 3), np.uint8))]
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+
+    for imagen, esperado in ((_diente(2), "aprobada"), (_astillado(2), "rechazada")):
+        juicio = mem.juzgar(_mas_luz(imagen), minimo_por_concepto=1, confianza_minima=0.0)
+        assert juicio.concepto == esperado
+
+
+def test_el_recorte_de_la_autoevaluacion_mide_las_mas_nuevas_de_verdad(
+    tmp_path: Path,
+) -> None:
+    """Las filas vienen agrupadas por concepto, asi que cortar el final de la lista se
+    quedaba con las fotos mas VIEJAS del ULTIMO concepto: el acierto que la pantalla
+    presenta como el de toda la memoria podia salir de un solo concepto."""
+    import os
+
+    base = tmp_path / "coleccion"
+    mapa: dict[str, list[Path]] = {"aprobada": [], "rechazada": []}
+    # Se alternan en el tiempo: las 6 mas nuevas son 3 de cada concepto.
+    for i in range(6):
+        for concepto, imagen in (("aprobada", _diente(i)), ("rechazada", _astillado(i))):
+            ruta = _guardar(base / concepto, f"{i}.jpg", imagen)
+            os.utime(ruta, (1_700_000_000 + i * 60, 1_700_000_000 + i * 60))
+            mapa[concepto].append(ruta)
+
+    mem = _memoria(tmp_path, maximo_autoevaluacion=6)
+    mem.sincronizar(mapa)
+    auto = mem.autoevaluacion()
+
+    assert auto.recortada is True
+    assert auto.total == 6
+    # Las dos clases tienen que estar representadas: si midiera el final de la lista,
+    # las 6 serian todas de 'rechazada'.
+    assert set(auto.por_concepto) == {"aprobada", "rechazada"}
+
+
+def test_la_cache_converge_aunque_dos_conceptos_tengan_fotos_con_el_mismo_nombre(
+    tmp_path: Path,
+) -> None:
+    """Sin la carpeta en la clave, cada arranque informaba una foto nueva y una que ya no
+    estaba, y volvia a analizar las dos para siempre."""
+    base = tmp_path / "coleccion"
+    mapa = {
+        "aprobada": [_guardar(base / "aprobada", "pieza.jpg", _diente(1))],
+        "rechazada": [_guardar(base / "rechazada", "pieza.jpg", _astillado(1))],
+    }
+    _memoria(tmp_path).sincronizar(mapa)
+
+    otra = _memoria(tmp_path)
+
+    assert otra.sincronizar(mapa) == (0, 0)
+
+
+def test_una_cache_cortada_a_la_mitad_no_deja_al_programa_sin_arrancar(
+    tmp_path: Path,
+) -> None:
+    """Un corte de luz en la mitad de la escritura. La cache es un atajo, no un dato."""
+    mapa = _taller(tmp_path, buenas=2, malas=2)
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+    datos = mem.archivo_cache.read_bytes()
+    mem.archivo_cache.write_bytes(datos[: len(datos) // 2])
+
+    otra = _memoria(tmp_path)
+
+    assert otra.sincronizar(mapa) == (4, 0)

@@ -469,3 +469,55 @@ def test_la_s_si_confirma_el_borrado(taller) -> None:
     _manejar(pan, conceptos, galeria, tecla=ord("s"))
 
     assert nombre not in conceptos.nombres()
+
+
+def test_el_punto_de_color_marca_si_el_concepto_es_para_tirar(taller) -> None:
+    """Sin esto, todo concepto que creara el taller nacia 'sano' y un diente astillado
+    salia en VERDE: la pantalla pinta segun esta marca."""
+    conceptos, galeria = taller
+    pan = _estado(conceptos, galeria, elegido=1)   # 0 es la galeria de modelos
+    nombre = pan.conceptos[1].nombre
+    assert not pan.conceptos[1].defecto
+
+    sigue, mensaje = _manejar(pan, conceptos, galeria, tecla=ord("d"))
+
+    assert sigue is True
+    assert "TIRAR" in (mensaje or "")
+    assert nombre in conceptos.defectos()
+    # Y se recuerda para la proxima vez que se abra el programa.
+    assert nombre in Conceptos(str(conceptos.carpeta)).defectos()
+
+
+def test_la_marca_se_puede_sacar(taller) -> None:
+    conceptos, galeria = taller
+    conceptos.marcar_defecto("aprobada", True)
+    pan = _estado(conceptos, galeria, elegido=1)
+
+    _, mensaje = _manejar(pan, conceptos, galeria, tecla=ord("d"))
+
+    assert "BUENA" in (mensaje or "")
+    assert conceptos.defectos() == []
+
+
+def test_el_punto_es_un_boton(taller) -> None:
+    conceptos, galeria = taller
+    estado = _estado(conceptos, galeria)
+
+    pantalla = panel.componer(estado, _ALTO)
+
+    # La galeria de modelos no lo tiene: no es ni bueno ni malo.
+    assert "defecto:0" not in pantalla.botones
+    assert "defecto:1" in pantalla.botones
+    # Y apretarlo marca, no elige.
+    x1, y1, x2, y2 = pantalla.botones["defecto:1"]
+    assert pantalla.boton_en((x1 + x2) // 2, (y1 + y2) // 2) == "defecto:1"
+
+
+def test_la_galeria_de_modelos_no_se_puede_marcar(taller) -> None:
+    conceptos, galeria = taller
+    pan = _estado(conceptos, galeria, elegido=0)
+
+    _manejar(pan, conceptos, galeria, tecla=ord("d"))
+
+    assert pan.aviso
+    assert conceptos.defectos() == []

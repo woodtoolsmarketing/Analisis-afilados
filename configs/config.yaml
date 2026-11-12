@@ -272,10 +272,18 @@ memoria:
   # foto, asi que la memoria puede crecer sin limite: con mil fotos el veredicto sigue
   # saliendo en milisegundos.
   #
-  # Medido sobre las 19 fotos de microscopio: con 12 candidatas se conservan el 98% de los
-  # vecinos que habria elegido la comparacion exacta. Ojo, ese 98% se midio con 12 de 19
-  # fotos; cuando haya cientos hay que volver a medirlo y quiza subir este numero.
-  candidatas_por_concepto: 6
+  # Lo que se pierde por descartar barato, medido sobre las 19 fotos de microscopio (todas
+  # en una bolsa, que es el caso mas exigente). De los tres vecinos que habria elegido la
+  # comparacion exacta, sobreviven:
+  #
+  #      3 candidatas  71.9%      8 candidatas  89.5%
+  #      4 candidatas  80.7%     12 candidatas  98.2%
+  #      6 candidatas  84.2%     18 candidatas  100%
+  #
+  # Va en 12: el veredicto se calcula UNA vez por pieza --no en cada cuadro-- asi que los
+  # 5 ms de diferencia no se notan y perder uno de cada seis vecinos si. Ese 98.2% sale de
+  # 19 fotos; cuando haya cientos hay que volver a medirlo.
+  candidatas_por_concepto: 12
   # Cuantas de esas candidatas promedian el puntaje del concepto. Con 1 --el mejor suelto--
   # una sola foto afortunada, o mal archivada, decide sola.
   vecinos_por_concepto: 3

@@ -44,6 +44,23 @@ def _sanear(nombre: str) -> str:
     return limpio or "captura"
 
 
+def _carpeta_de(clase: str) -> str:
+    """El nombre de carpeta de una clase: EL SUYO, no uno saneado.
+
+    Las clases salen de las carpetas que hay en disco (ver conceptos.py), asi que sanearlas
+    aca creaba una carpeta MELLIZA: un concepto llamado "diente nato" --copiado a mano con
+    el Explorador-- se mostraba en el panel con sus fotos, pero al guardar una nueva se
+    escribia en "diente_ato", y la misma pieza quedaba repartida en dos carpetas que el
+    programa trataba como dos cosas distintas.
+
+    Lo unico que se rechaza es lo que podria escribir fuera de la coleccion.
+    """
+    limpio = str(clase).strip()
+    if not limpio or limpio in (".", "..") or "/" in limpio or "\\" in limpio:
+        raise ValueError(f"nombre de clase invalido para una carpeta: '{clase}'")
+    return limpio
+
+
 def _json_por_defecto(valor: Any) -> Any:
     """Convierte tipos numpy a nativos: json.dumps revienta con np.float32/np.int64."""
     # np.bool_ va primero: no es subclase de np.integer, y una comparacion de numpy
@@ -411,7 +428,7 @@ class AlmacenClasificacion:
         """
         conteos: dict[str, int] = {}
         for clase in self._clases:
-            carpeta = self._base / _sanear(clase)
+            carpeta = self._base / _carpeta_de(clase)
             try:
                 conteos[clase] = sum(
                     1
@@ -457,7 +474,7 @@ class AlmacenClasificacion:
             raise ValueError(
                 f"clase '{clase}' desconocida; validas: {', '.join(self._clases)}"
             )
-        carpeta = self._base / _sanear(clase)
+        carpeta = self._base / _carpeta_de(clase)
         carpeta.mkdir(parents=True, exist_ok=True)
         ahora = datetime.now()
         sello = ahora.strftime("%Y%m%d_%H%M%S_") + f"{ahora.microsecond // 1000:03d}"

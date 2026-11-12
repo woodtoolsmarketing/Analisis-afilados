@@ -15,8 +15,9 @@ COMO DECIDE
 -----------
 Se le pregunta a las fotos guardadas: cuales se parecen mas a la que estoy mirando, y en
 que concepto estan archivadas esas. Es comparacion de fotos, no una red; eso tiene dos
-consecuencias que conviene tener claras: se puede explicar foto por foto --la pantalla
-muestra a cual se parecio y cuanto-- y no inventa nada que no este guardado.
+consecuencias que conviene tener claras: la pantalla puede decir A QUE CONCEPTO se parecio
+y cuanto --el detalle de cada vecino queda en Juicio.vecinos, para quien lo necesite-- y no
+inventa nada que no este guardado.
 
 EN DOS ETAPAS, PARA QUE PUEDA CRECER SIN LIMITE
 -----------------------------------------------
@@ -26,13 +27,15 @@ veredicto. Por eso primero se descarta barato y despues se mide caro:
     etapa barata  un producto escalar por foto: 0.1 microsegundos cada una. Mil fotos
                   son 0.1 ms. Sirve para quedarse con las candidatas de cada concepto.
     etapa exacta  matchTemplate, que ALINEA las dos fotos antes de compararlas, sobre las
-                  6 candidatas de cada concepto. Con cinco conceptos son 30 comparaciones,
-                  14 ms, cueste lo que cueste la memoria entera.
+                  12 candidatas de cada concepto. Con cinco conceptos son 60 comparaciones,
+                  28 ms, cueste lo que cueste la memoria entera.
 
-Medido sobre las 19 fotos de microscopio del taller, quedandose con 12 candidatas la etapa
-barata conserva el 98% de los tres vecinos que habria elegido la exacta. Ese 98% esta
-medido con 12 de 19 fotos; cuando la memoria tenga cientos hay que volver a medirlo, y por
-eso la cantidad de candidatas es configurable.
+Lo que se pierde por descartar barato, medido sobre las 19 fotos de microscopio del taller
+(todas en una bolsa, que es el caso mas exigente): de los tres vecinos que habria elegido la
+comparacion exacta, con 6 candidatas sobreviven el 84.2% y con 12 el 98.2%. Por eso van 12:
+el veredicto se calcula una vez por pieza, no en cada cuadro, asi que los 5 ms de diferencia
+no se notan y perder uno de cada seis vecinos si. Ese 98.2% sale de 19 fotos; cuando la
+memoria tenga cientos hay que volver a medirlo, y por eso es configurable.
 
 QUE MIDE EL PARECIDO (y por que estas dos cosas y no una)
 ----------------------------------------------------------
@@ -75,12 +78,20 @@ Eso da un porcentaje de acierto sobre las fotos del taller, no sobre un folleto,
 actualiza con cada foto nueva. Es el unico numero honesto sobre "cuanta precision tiene
 esto", y de ahi sale tambien la confianza: de las veces que la memoria estuvo igual de
 ajustada que ahora, cuantas acerto.
+
+LO QUE ESE NUMERO TIENE DE OPTIMISTA, y conviene saberlo: si la misma pieza quedo
+fotografiada dos veces en el mismo concepto, al esconder una la otra sigue ahi y la ubica
+sin esfuerzo. O sea que el acierto sube cuando se sacan varias tomas de la misma pieza, y
+sube sin que el programa haya aprendido nada nuevo. Para que el numero signifique lo que
+parece, las fotos de un concepto tienen que ser de PIEZAS distintas.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -109,7 +120,9 @@ _RECORTE = 5  # la plantilla es el centro: se recorta 1/5 por lado
 DIM_MINI = LADO_MINI * LADO_MINI
 DIM_BORDES = _BLOQUES * _BLOQUES * _ANGULOS
 
-_VERSION = 1
+# Sube cuando cambia como se calcula o se guarda algo: una cache de otra version se
+# descarta y se rehace sola. La 2 cambio la clave de cada foto para incluir su carpeta.
+_VERSION = 2
 _ARCHIVO = "memoria.npz"
 
 _SIN_FOTOS = "la memoria todavia no tiene fotos"
@@ -162,21 +175,30 @@ class Autoevaluacion:
         return self.aciertos / self.total if self.total else None
 
     def confianza(self, margen: float, minimo_casos: int = 8) -> Optional[float]:
-        """Que tan seguido acerto la memoria cuando estuvo IGUAL DE AJUSTADA o peor.
+        """Que tan seguido acerto la memoria cuando estuvo IGUAL DE AJUSTADA que ahora.
 
         Un margen grande entre el primero y el segundo concepto es una decision comoda; uno
         chico es una decision al filo. En vez de inventar un umbral de margen, se mira que
-        paso de verdad en los casos igual de ajustados: si de las 12 veces que estuvo asi
-        de ajustada acerto 6, la confianza es 50% y el programa lo dice.
+        paso de verdad en las decisiones PARECIDAS A ESTA: si de las doce veces que estuvo
+        asi de ajustada acerto seis, la confianza es 50% y el programa lo dice.
+
+        SE MIRAN LOS MARGENES MAS CERCANOS, no "los menores o iguales". Al principio esto
+        filtraba con m <= margen, y hacia exactamente lo contrario de lo que dice: para un
+        margen comodo el conjunto era TODA la memoria --todos los casos son menores o
+        iguales que uno comodo-- asi que la confianza caia al acierto global y la decision
+        mas clara del dia se rechazaba; y para un empate de verdad quedaban dos o tres
+        casos, menos que el minimo, devolvia None y el empate pasaba sin control. Medido
+        sobre una memoria real: una consulta con 50.8 puntos de ventaja salia "NO ESTOY
+        SEGURO - esta muy parejo", y dos empates de 31 y 21 puntos salian APROBADO sin una
+        palabra de duda.
 
         None si no hay casos suficientes para que el numero signifique algo.
         """
-        if not self.casos:
+        if len(self.casos) < minimo_casos:
             return None
-        parecidos = [acerto for m, acerto in self.casos if m <= margen]
-        if len(parecidos) < minimo_casos:
-            return None
-        return sum(1 for a in parecidos if a) / len(parecidos)
+        ventana = max(minimo_casos, round(len(self.casos) * 0.25))
+        cercanos = sorted(self.casos, key=lambda caso: abs(caso[0] - margen))[:ventana]
+        return sum(1 for _, acerto in cercanos if acerto) / len(cercanos)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +268,13 @@ def alineado(forma_a: np.ndarray, forma_b: np.ndarray) -> float:
     margen = LADO_FORMA // _RECORTE
     plantilla = _normalizar(forma_b)[margen:-margen, margen:-margen]
     if plantilla.size == 0:
+        return 0.0
+    # UNA FOTO DE UN SOLO COLOR SE PARECE A TODO. Al normalizarla queda en ceros, y
+    # matchTemplate con una plantilla sin varianza devuelve el maximo contra cualquier
+    # imagen: medido, una foto negra archivada daba alineado 1.000 contra un diente, contra
+    # un astillado y contra cualquier cosa, y su concepto se quedaba con un piso de 0.500
+    # para toda consulta. Una foto asi no se parece a nada: no tiene con que parecerse.
+    if float(plantilla.std()) < 1e-6:
         return 0.0
     respuesta = cv2.matchTemplate(_normalizar(forma_a), plantilla, cv2.TM_CCOEFF_NORMED)
     return float(np.clip(respuesta.max(), 0.0, 1.0))
@@ -493,21 +522,40 @@ class Memoria:
         juicio.confianza = auto.confianza(juicio.margen)
         if juicio.confianza is not None and juicio.confianza < float(confianza_minima):
             juicio.motivo = (
-                f"esta muy parejo: {mejor} y {ordenados[1][0]} quedaron a "
-                f"{juicio.margen * 100:.1f} puntos, y asi de parejo la memoria acierta "
+                f"{mejor} y {ordenados[1][0]} quedaron a {juicio.margen * 100:.1f} puntos, "
+                f"y en decisiones asi de ajustadas la memoria acierta "
                 f"{juicio.confianza * 100:.0f}% de las veces"
             )
             return juicio
 
         juicio.concepto = mejor
+        # EL PORCENTAJE QUE SE MUESTRA TIENE QUE SER DEL CONCEPTO QUE SE NOMBRA. Hasta aca
+        # juicio.parecido es el mejor vecino de TODA la memoria --que es lo correcto para
+        # decidir si la foto se parece a algo-- pero la pantalla lo escribe pegado al
+        # nombre del concepto que gano: medido, llego a decir "se parece a filo_quemado
+        # (100%)" cuando ese 100% era de una foto archivada en aprobada. Es exactamente el
+        # tipo de numero que ya costo caro en este proyecto.
+        propio = max(
+            (v for v in vecinos if v.concepto == mejor),
+            key=lambda v: v.parecido,
+            default=vecinos[0],
+        )
+        juicio.parecido = propio.parecido
         try:
-            juicio.zona = zona_distinta(forma, self._formas[self._indice_de(vecinos[0])])
+            juicio.zona = zona_distinta(forma, self._formas[self._indice_de(propio)])
         except (cv2.error, ValueError):
             juicio.zona = None
         return juicio
 
     def _indice_de(self, vecino: Vecino) -> int:
         return self._archivos.index(vecino.archivo)
+
+    def _fecha_de(self, indice: int) -> int:
+        """La fecha de la foto, sacada de su clave. 0 si la clave no tiene forma."""
+        try:
+            return int(self._claves[indice].split("|")[-2])
+        except (IndexError, ValueError):
+            return 0
 
     def _vecinos_y_puntajes(
         self,
@@ -522,7 +570,7 @@ class Memoria:
             barato[excluir] = -np.inf
 
         vecinos: list[Vecino] = []
-        puntajes: dict[str, float] = {}
+        por_concepto: dict[str, list[Vecino]] = {}
         for concepto in self.conteo_por_concepto():
             filas = np.flatnonzero(self._conceptos_np == concepto)
             if excluir is not None:
@@ -544,11 +592,24 @@ class Memoria:
                     )
                 )
             del_concepto.sort(key=lambda v: v.parecido, reverse=True)
-            mejores = del_concepto[: self._vecinos]
-            # El puntaje del concepto es el PROMEDIO de sus mejores, no su mejor suelto:
-            # con el mejor suelto, una sola foto afortunada --o mal archivada-- decide.
-            puntajes[concepto] = float(sum(v.parecido for v in mejores) / len(mejores))
+            por_concepto[concepto] = del_concepto
             vecinos.extend(del_concepto)
+
+        # TODOS LOS CONCEPTOS SE PUNTUAN CON LA MISMA CANTIDAD DE FOTOS. Antes cada uno
+        # promediaba sus mejores tres, o menos si no tenia tres, asi que el de UNA foto
+        # puntuaba por su maximo y el de cuatro por un promedio: medido, el mismo concepto
+        # pasaba de 0.9997 con una foto a 0.6328 con tres, y entonces archivar la primera
+        # foto de un concepto nuevo le daba vuelta el veredicto a la pieza que se estaba
+        # mirando. Se usa el minimo comun --el concepto con menos candidatas manda-- para
+        # que la comparacion sea entre iguales y ninguno quede afuera por chico.
+        comun = min(
+            [self._vecinos] + [len(v) for v in por_concepto.values()]
+        ) if por_concepto else self._vecinos
+        comun = max(1, comun)
+        puntajes = {
+            concepto: float(sum(v.parecido for v in lista[:comun]) / comun)
+            for concepto, lista in por_concepto.items()
+        }
 
         vecinos.sort(key=lambda v: v.parecido, reverse=True)
         return vecinos, puntajes
@@ -568,8 +629,15 @@ class Memoria:
         # Con muchas fotos esto es O(n^2) y hay que acotarlo: se mide sobre las mas nuevas
         # y se dice en pantalla que se midio sobre esas. Recortar en silencio seria mentir
         # con un numero que parece el acierto de toda la memoria.
+        #
+        # LAS MAS NUEVAS POR FECHA, no por posicion en la lista. Las filas vienen agrupadas
+        # por concepto --se arman recorriendo el mapa de carpetas-- asi que cortar el final
+        # de la lista se quedaba con las fotos mas VIEJAS del ULTIMO concepto, y el acierto
+        # que la pantalla presenta como el de toda la memoria podia salir de un solo
+        # concepto. La fecha ya esta guardada en la clave de cada foto.
         indices = list(range(total))
         if self._tope_auto and total > self._tope_auto:
+            indices.sort(key=self._fecha_de)
             indices = indices[-self._tope_auto:]
             auto.recortada = True
 
@@ -626,7 +694,10 @@ class Memoria:
                 self._bordes = datos["bordes"].astype(np.float32)
                 self._formas = datos["formas"].astype(np.uint8)
                 crudo = str(datos["auto"][0]) if "auto" in datos else ""
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as error:
+            # Un npz a medio escribir --corte de luz, disco lleno-- no puede dejar al
+            # taller sin programa: la cache no es un dato, es un atajo, y se rehace sola
+            # leyendo las fotos.
             _log.warning("no se pudo leer la memoria guardada (%s); se rehace", error)
             self._vaciar()
             return
@@ -653,11 +724,17 @@ class Memoria:
         self._reindexar()
 
     def _guardar(self) -> None:
-        """Escribe la cache. Que falle solo cuesta tiempo en el proximo arranque."""
+        """Escribe la cache. Que falle solo cuesta tiempo en el proximo arranque.
+
+        Se escribe en un archivo aparte y recien al final se lo pone en su lugar de un
+        golpe. Asi una escritura cortada a la mitad --el operario apaga la PC con la llave
+        general, que en un taller pasa-- no llega nunca a ser la cache viva.
+        """
+        provisorio = self.archivo_cache.with_suffix(".npz.tmp")
         try:
             self._base.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(
-                self.archivo_cache,
+                provisorio,
                 version=np.array([_VERSION], np.int32),
                 claves=_textos(self._claves),
                 archivos=_textos(self._archivos),
@@ -667,6 +744,9 @@ class Memoria:
                 formas=self._formas,
                 auto=np.array([_auto_a_json(self._auto)], dtype="U"),
             )
+            # np.savez le agrega .npz al nombre si no lo termina en .npz.
+            escrito = provisorio if provisorio.is_file() else Path(str(provisorio) + ".npz")
+            os.replace(escrito, self.archivo_cache)
         except (OSError, ValueError) as error:
             _log.warning("no se pudo guardar la memoria: %s", error)
 
@@ -679,12 +759,18 @@ def _textos(lista: list[str]) -> np.ndarray:
 
 
 def _clave(ruta: Path) -> Optional[str]:
-    """Identifica una foto por nombre, fecha y tamano: si cambia, se vuelve a analizar."""
+    """Identifica una foto por carpeta, nombre, fecha y tamano.
+
+    La CARPETA entra en la clave porque dos conceptos pueden tener una foto con el mismo
+    nombre --pasa al copiar una tanda con el Explorador-- y sin ella la cache no convergia
+    nunca: cada arranque informaba una foto nueva y una que ya no estaba, y volvia a
+    analizar las dos.
+    """
     try:
         est = ruta.stat()
     except OSError:
         return None
-    return f"{ruta.name}|{est.st_mtime_ns}|{est.st_size}"
+    return f"{ruta.parent.name}/{ruta.name}|{est.st_mtime_ns}|{est.st_size}"
 
 
 def _auto_a_json(auto: Optional[Autoevaluacion]) -> str:

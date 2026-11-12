@@ -532,6 +532,10 @@ que concepto va. De ahi sale el `acierta 21 de 24` que aparece en pantalla y en 
 el unico numero honesto sobre cuanta precision tiene esto: sale de las fotos de ESTE taller y
 sube (o baja) con cada foto que entra.
 
+> Ese numero es **optimista si se sacan varias tomas de la misma pieza**: al esconder una, la
+> otra sigue ahi y la ubica sin esfuerzo. Para que signifique lo que parece, las fotos de un
+> concepto tienen que ser de **piezas distintas**.
+
 **Y cuando no esta segura, lo dice.** En vez de un umbral inventado, mira que paso de verdad
 en los casos igual de ajustados: si de las doce veces que estuvo asi de parejo acerto seis,
 la confianza es 50% y el cartel dice **NO ESTOY SEGURO** con el motivo. Un APROBADO salido de
@@ -584,8 +588,8 @@ Un **concepto** es una carpeta de fotos que significan lo mismo: `aprobada`, `re
   memoria: 24 fotos (aprobada 14  rechazada 10)  -  acierta 21 de 24
 
   [ ] 1  foto de modelo      19 fotos  -  es la foto con la que se compara, no un concepto
-  (o) 2  aprobada            14 fotos  -  la memoria acierta 12 de 14
-  (o) 3  rechazada           10 fotos  -  la memoria acierta 9 de 10
+  (o) 2  aprobada            14 fotos  -  la memoria acierta 12 de 14      <- verde: buena
+  (o) 3  rechazada           10 fotos  -  la memoria acierta 9 de 10      <- rojo: para tirar
   (o) 4  filo_quemado        sin fotos todavia
 
   [GUARDAR ACA] [NUEVO CONCEPTO] [VER FOTOS] [BORRAR CONCEPTO]        [VOLVER]
@@ -595,6 +599,10 @@ Un **concepto** es una carpeta de fotos que significan lo mismo: `aprobada`, `re
   se aprieta **GUARDAR ACA** o `ENTER`. A la derecha se ve la foto que se esta por archivar.
 - **Crear un concepto**: **NUEVO CONCEPTO** o `n`, se escribe el nombre y `ENTER`. Queda
   creada la carpeta y se puede usar en el acto, sin cerrar el programa.
+- **Decir si es bueno o malo**: el **punto de color** de la izquierda se puede apretar, o la
+  tecla `d`. Verde = pieza buena, rojo = pieza para tirar. **Esto es lo que decide si la
+  pantalla pinta APROBADO o DESAPROBADO** cuando la memoria elige ese concepto, asi que un
+  concepto nuevo como `diente_astillado` hay que marcarlo en rojo.
 - **Ver y tirar fotos**: **VER FOTOS** o `v` muestra las del concepto elegido; `b` manda la
   elegida a la papelera. Sirve para sacar la foto movida o la que quedo en la carpeta
   equivocada.

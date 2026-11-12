@@ -852,6 +852,12 @@ def componer_simple(
     y2 = y1 + 48
     botones: dict[str, Rect] = {}
     etiquetas: list[tuple[str, Rect, tuple]] = []
+    # SALIR manda a la derecha y se calcula ANTES que todo lo demas: con nombres de
+    # concepto largos, los botones de guardar seguian creciendo y se metian abajo de SALIR.
+    # Como boton_en() se queda con el primero que encuentra y los de guardar se insertan
+    # antes, el clic en SALIR archivaba una foto en vez de cerrar el programa.
+    ancho_salir, _ = tipografia.medir("SALIR", 21, negrita=True)
+    x_salir = ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON
     if estado.congelado:
         # Los destinos rapidos salen de los conceptos que haya: con el esquema de siempre
         # son "aprobada" y "rechazada", pero si el taller creo otros, los botones los
@@ -865,6 +871,11 @@ def componer_simple(
             rapidos.append((clave, etiqueta, _ROJO_NO if es_defecto else _VERDE_OK))
         for clave, texto_boton, color_boton in rapidos:
             x = margen if not botones else max(r[2] for r in botones.values()) + 12
+            ancho_boton, _ = tipografia.medir(texto_boton, 21, negrita=True)
+            if x + ancho_boton + 2 * _RELLENO_BOTON > x_salir - 12:
+                # No entra: no se dibuja, en vez de montarse sobre SALIR. La tecla sigue
+                # archivando igual, y el panel de CONCEPTOS llega a todos los destinos.
+                continue
             rect = _boton_lindo(lienzo, x, y1, y2, texto_boton, color_boton)
             botones[clave] = rect
             etiquetas.append((texto_boton, rect, color_boton))
@@ -873,24 +884,23 @@ def componer_simple(
         botones["revisar"] = rect
         etiquetas.append(("REVISAR", rect, _AZUL))
 
-    ancho_salir, _ = tipografia.medir("SALIR", 21, negrita=True)
-    x_salir = ANCHO_LIENZO - margen - ancho_salir - 2 * _RELLENO_BOTON
     rect_salir = _boton_lindo(lienzo, x_salir, y1, y2, "SALIR", _SUPERFICIE)
     botones["salir"] = rect_salir
     etiquetas.append(("SALIR", rect_salir, _SUPERFICIE))
 
     # Los de la derecha se van acomodando hacia la izquierda y se saltean si no entran:
     # ninguno puede montarse sobre los de guardar, que son los que deciden si una sierra
-    # se tira o no.
-    tope = x_salir
+    # se tira o no. CONCEPTOS pide lugar primero porque es el unico camino para llegar a
+    # los destinos que no entraron en la barra; cambiar de foto de modelo se puede hacer
+    # igual con la tecla 'm'.
+    tope = _boton_a_la_izquierda(
+        lienzo, x_salir, y1, y2, "conceptos", "CONCEPTOS", _AZUL, botones, etiquetas
+    )
     # Cambiar de modelo solo tiene sentido si hay mas de uno cargado.
     if estado.posicion_referencia[1] > 1:
         tope = _boton_a_la_izquierda(
             lienzo, tope, y1, y2, "modelo", "OTRO MODELO", _SUPERFICIE, botones, etiquetas
         )
-    tope = _boton_a_la_izquierda(
-        lienzo, tope, y1, y2, "conceptos", "CONCEPTOS", _AZUL, botones, etiquetas
-    )
 
     rect_mensaje = None
     if estado.mensaje:
@@ -913,6 +923,12 @@ def componer_simple(
             ancho_t, alto_t = tipografia.medir(titulo_col, 20, negrita=True)
             pincel.texto(titulo_col, (x + (ancho_panel - ancho_t) // 2,
                                       alto_cabecera - alto_t - 12), _TEXTO_TENUE, 20, True)
+
+        if "conceptos" not in botones:
+            # El boton no entro en la barra --nombres de concepto largos-- y entonces la
+            # unica forma de llegar al panel es la tecla. Si no se dice en ningun lado,
+            # para el operario el panel no existe.
+            pincel.texto("tecla c: conceptos", (margen + 2, 10), _TEXTO_TENUE, 15)
 
         if referencia is None:
             for i, linea in enumerate(("No hay fotos de modelo.", "",

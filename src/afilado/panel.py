@@ -75,6 +75,9 @@ class EstadoPanel:
     aviso: Optional[str] = None
     resumen: str = ""
     aciertos: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # Si el acierto se midio sobre un recorte de las fotos y no sobre todas. Sin esto, la
+    # fila diria "acierta 9 de 10" cuando el concepto tiene 300 fotos y se midieron 10.
+    recortada: bool = False
     # La foto que se va a archivar, si se llego aca con una foto en la mano.
     pendiente: Optional[np.ndarray] = None
     # Modo fotos: las rutas del concepto elegido y en que pagina se esta.
@@ -144,6 +147,11 @@ def _texto_aciertos(estado: EstadoPanel, concepto: Concepto) -> str:
     if not par or par[1] == 0:
         return f"{concepto.fotos} fotos"
     bien, total = par
+    # Se dice "de las N que midio" y no "de N": con muchas fotos la autoevaluacion se mide
+    # sobre un recorte, y un "acierta 9 de 10" al lado de "300 fotos" se lee como si
+    # hubiera medido las 300.
+    if estado.recortada or total < concepto.fotos:
+        return f"{concepto.fotos} fotos  -  acierta {bien} de las {total} que midio"
     return f"{concepto.fotos} fotos  -  la memoria acierta {bien} de {total}"
 
 
@@ -274,6 +282,12 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
         else:
             color_punto = _ROJO_NO if concepto.defecto else _VERDE_OK
             cv2.circle(lienzo, (_MARGEN + 26, y + 23), 9, color_punto, -1, cv2.LINE_AA)
+            # EL PUNTO SE PUEDE APRETAR y cambia de verde a rojo. Es lo que decide si la
+            # pantalla pinta APROBADO o DESAPROBADO cuando la memoria elige ese concepto:
+            # sin esto, todo concepto que creara el taller nacia "sano" y un diente
+            # astillado salia en verde. Va ANTES que la fila en el diccionario, porque
+            # boton_en se queda con el primero que encuentra.
+            botones[f"defecto:{indice}"] = (_MARGEN + 10, y + 6, _MARGEN + 44, y + 40)
 
         # El numero solo se dibuja si tiene tecla: del decimo en adelante no hay digito que
         # lo alcance y un numero sin tecla es una promesa que no se cumple.
@@ -297,8 +311,8 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
 
     # Todo lo que hay en los botones tiene tecla, y la tecla se dice. En el taller el
     # mouse esta siempre con aserrin y el operario termina usando el teclado.
-    teclas = ("teclas:   1-9 elegir   ENTER guardar aca   n nuevo   v ver fotos   "
-              "b borrar   ESC volver")
+    teclas = ("teclas:   1-9 elegir   ENTER guardar aca   n nuevo   d bueno/malo   "
+              "v ver fotos   b borrar   ESC volver")
     if hay_mas:
         teclas += f"   |   {estado.elegido + 1} de {len(estado.conceptos)}, w y s para moverse"
     lineas.append((teclas, (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False))
@@ -358,6 +372,10 @@ def _dibujar_borrar(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list)
                    (_MARGEN + 28, y + 110), _TEXTO_TENUE, 19, False))
     lineas.append(("se puede volver a sacar con el Explorador de Windows.",
                    (_MARGEN + 28, y + 138), _TEXTO_TENUE, 19, False))
+    # Esta pantalla es la unica donde una tecla hace algo que no se puede deshacer con otra
+    # tecla, asi que las dos tienen que estar escritas.
+    lineas.append(("teclas:   s = si, borralo      n o ESC = no, dejalo",
+                   (_MARGEN + 4, alto - _ALTO_BOTONES - 22), _TEXTO_TENUE, 16, False))
 
     _fila_de_botones(
         lienzo, alto,
@@ -390,7 +408,10 @@ def _dibujar_fotos(
     visibles = estado.fotos[desde:desde + _POR_PAGINA]
     filas = 2
     ancho_celda = (ANCHO_LIENZO - _MARGEN * (_COLUMNAS + 1)) // _COLUMNAS
-    alto_disponible = alto - _ALTO_CABECERA - _ALTO_BOTONES - _MARGEN
+    # Se reservan los dos renglones de abajo --el aviso y la linea de teclas-- igual que en
+    # la lista. Sin reservarlos, el texto se dibujaba ENCIMA de la segunda fila de
+    # miniaturas y no se podia leer ninguno de los dos.
+    alto_disponible = alto - _ALTO_CABECERA - _ALTO_BOTONES - _MARGEN - 56
     alto_celda = max(90, (alto_disponible - _MARGEN * (filas - 1)) // filas)
 
     for posicion, ruta in enumerate(visibles):
