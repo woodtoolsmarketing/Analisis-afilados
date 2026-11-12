@@ -107,3 +107,55 @@ def test_el_umbral_sale_del_config(cfg: AppConfig) -> None:
     cfg.interfaz.nitidez_minima = 1e9
 
     assert run_live.motivo_para_no_archivar(_CamaraFalsa(), _nitida(), cfg) is not None
+
+
+# ---------------------------------------------------------------------------
+# EL CONTEO ACUMULADO. total_guardados solo cuenta la sesion actual, que no
+# sirve para saber si ya alcanza para entrenar: el dataset se junta de a ratos.
+# ---------------------------------------------------------------------------
+
+
+def test_cuenta_las_fotos_que_ya_estaban_en_disco(tmp_path) -> None:
+    from afilado.almacen import AlmacenClasificacion
+
+    for clase, cuantas in (("aprobada", 3), ("rechazada", 2)):
+        carpeta = tmp_path / clase
+        carpeta.mkdir()
+        for i in range(cuantas):
+            cv2.imwrite(str(carpeta / f"{clase}_{i}.jpg"), np.zeros((8, 8, 3), np.uint8))
+
+    almacen = AlmacenClasificacion(str(tmp_path), ["aprobada", "rechazada"])
+
+    assert almacen.total_guardados == 0, "esta sesion no guardo nada"
+    assert almacen.conteo_por_clase() == {"aprobada": 3, "rechazada": 2}
+
+
+def test_una_clase_sin_carpeta_cuenta_cero(tmp_path) -> None:
+    from afilado.almacen import AlmacenClasificacion
+
+    almacen = AlmacenClasificacion(str(tmp_path), ["aprobada", "rechazada"])
+
+    assert almacen.conteo_por_clase() == {"aprobada": 0, "rechazada": 0}
+
+
+def test_el_conteo_sube_al_guardar(tmp_path) -> None:
+    from afilado.almacen import AlmacenClasificacion
+
+    almacen = AlmacenClasificacion(str(tmp_path), ["aprobada", "rechazada"])
+    almacen.guardar(np.zeros((8, 8, 3), np.uint8), "aprobada")
+
+    assert almacen.conteo_por_clase()["aprobada"] == 1
+
+
+def test_no_cuenta_archivos_que_no_son_fotos(tmp_path) -> None:
+    """Un .txt o un .ultima tirado en la carpeta no es una muestra de entrenamiento."""
+    from afilado.almacen import AlmacenClasificacion
+
+    carpeta = tmp_path / "aprobada"
+    carpeta.mkdir()
+    cv2.imwrite(str(carpeta / "buena.jpg"), np.zeros((8, 8, 3), np.uint8))
+    (carpeta / "notas.txt").write_text("no soy una foto", encoding="utf-8")
+
+    almacen = AlmacenClasificacion(str(tmp_path), ["aprobada"])
+
+    assert almacen.conteo_por_clase() == {"aprobada": 1}

@@ -491,3 +491,73 @@ def test_sin_modelo_la_pantalla_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
 
     assert not _color_pintado(pantalla, revision._VERDE_OK)
     assert not _color_pintado(pantalla, revision._ROJO_NO)
+
+
+# ---------------------------------------------------------------------------
+# EL CARTEL DE "SIN MODELO" COMO BARRA DE AVANCE. Decir "todavia no hay modelo
+# entrenado" es cierto y a la vez un callejon sin salida: no dice que el modelo
+# lo construye el propio operario juntando fotos, ni cuantas le faltan.
+# ---------------------------------------------------------------------------
+
+
+def test_sin_modelo_muestra_cuantas_fotos_van(cfg: AppConfig) -> None:
+    cfg.interfaz.fotos_por_clase_objetivo = 50
+    estado = revision.EstadoRevision(
+        congelado=True, conteos={"aprobada": 12, "rechazada": 8}
+    )
+
+    titulo, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "SIN MODELO"
+    assert "12/50" in detalle and "8/50" in detalle
+
+
+def test_sin_fotos_el_cartel_dice_que_hacer(cfg: AppConfig) -> None:
+    """Arrancando de cero, un '0/50' solo no explica de donde salen esas fotos."""
+    estado = revision.EstadoRevision(congelado=True, conteos=None)
+
+    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert "APROBADA" in detalle and "RECHAZADA" in detalle
+
+
+def test_al_llegar_a_la_meta_avisa_que_se_puede_entrenar(cfg: AppConfig) -> None:
+    cfg.interfaz.fotos_por_clase_objetivo = 50
+    estado = revision.EstadoRevision(
+        congelado=True, conteos={"aprobada": 50, "rechazada": 61}
+    )
+
+    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert "entrenar" in detalle
+
+
+def test_una_clase_corta_todavia_no_esta_lista(cfg: AppConfig) -> None:
+    """Con 80 buenas y 3 malas no se entrena nada: el modelo dice 'buena' siempre."""
+    cfg.interfaz.fotos_por_clase_objetivo = 50
+    estado = revision.EstadoRevision(
+        congelado=True, conteos={"aprobada": 80, "rechazada": 3}
+    )
+
+    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert "entrenar" not in detalle
+    assert "3/50" in detalle
+
+
+def test_sin_meta_configurada_igual_muestra_el_conteo(cfg: AppConfig) -> None:
+    cfg.interfaz.fotos_por_clase_objetivo = 0
+    estado = revision.EstadoRevision(congelado=True, conteos={"aprobada": 7})
+
+    _, detalle, _, _ = revision.estado_resultado(estado, cfg)
+
+    assert "7" in detalle and "/" not in detalle
+
+
+def test_el_avance_no_pinta_verde_ni_rojo(cfg: AppConfig) -> None:
+    """Sigue sin haber veredicto: el color tiene que ser el de espera."""
+    estado = revision.EstadoRevision(congelado=True, conteos={"aprobada": 50, "rechazada": 50})
+
+    _, _, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert color == revision._AMBAR and aprobado is None

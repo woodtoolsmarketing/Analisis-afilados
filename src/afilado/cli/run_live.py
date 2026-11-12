@@ -557,6 +557,9 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     nulos_seguidos = 0
     ventana_ajustada = False
     estado = revision.EstadoRevision()
+    # Se cuenta UNA vez al arrancar y despues de cada guardado, no en cada frame: son
+    # lecturas de disco y el bucle corre a 17 fps.
+    estado.conteos = almacen.conteo_por_clase()
     # Evaluacion en vivo: se clasifica cada N frames, pero el veredicto que se MUESTRA solo
     # cambia cuando varias evaluaciones seguidas coinciden. Sin esa confirmacion el cartel
     # parpadea entre aprobado y rechazado con cada temblor de la mano, y un cartel que
@@ -714,6 +717,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     try:
                         ruta = almacen.guardar(base, accion)
                         estado.capturas = almacen.total_guardados
+                        estado.conteos = almacen.conteo_por_clase()
                         estado.mensaje = f"GUARDADA como {accion}: {ruta.name}"
                     except (OSError, ValueError) as error:
                         _registro.error("no se pudo guardar: %s", error)

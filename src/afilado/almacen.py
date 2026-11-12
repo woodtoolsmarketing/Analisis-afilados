@@ -374,6 +374,26 @@ class AlmacenClasificacion:
     def total_guardados(self) -> int:
         return self._guardados
 
+    def conteo_por_clase(self) -> dict[str, int]:
+        """Cuantas fotos hay EN DISCO de cada clase, contando las de sesiones anteriores.
+
+        total_guardados solo cuenta lo de esta sesion, que no sirve para saber si ya hay
+        suficiente para entrenar: el dataset se junta de a ratos, un dia unas pocas y otro
+        dia otras pocas. Lo que importa es el acumulado.
+        """
+        conteos: dict[str, int] = {}
+        for clase in self._clases:
+            carpeta = self._base / _sanear(clase)
+            try:
+                conteos[clase] = sum(
+                    1
+                    for p in carpeta.iterdir()
+                    if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png")
+                )
+            except OSError:
+                conteos[clase] = 0
+        return conteos
+
     def guardar(self, frame_limpio: np.ndarray, clase: str) -> Path:
         """Escribe el frame en <base>/<clase>/ y devuelve la ruta. No muta el frame de entrada."""
         if clase not in self._clases:

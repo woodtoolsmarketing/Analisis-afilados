@@ -69,6 +69,10 @@ class EstadoRevision:
     # imagen se enfoque. Con None se dibuja como siempre (modo a pedido).
     nitidez: Optional[float] = None
     esperando_foco: bool = False
+    # Cuantas fotos hay juntadas de cada clase, contando sesiones anteriores. Sin esto el
+    # cartel de SIN MODELO es un callejon sin salida: dice que falta el modelo pero no que
+    # el operario es justamente quien lo esta construyendo, ni cuanto le falta.
+    conteos: Optional[dict] = None
 
 
 @dataclass
@@ -580,11 +584,29 @@ def estado_resultado(
         return "ESPERANDO", "apriete REVISAR", _SUPERFICIE, None
     valor = coincidencia(estado.veredicto, cfg)
     if valor is None:
-        return "SIN MODELO", "todavia no hay modelo entrenado", _AMBAR, None
+        return "SIN MODELO", _progreso_del_dataset(estado, cfg), _AMBAR, None
     umbral = float(cfg.interfaz.umbral_aprobacion)
     if valor >= umbral:
         return "APROBADO", f"coincidencia {valor * 100:.0f}%", _VERDE_OK, True
     return "DESAPROBADO", f"coincidencia {valor * 100:.0f}%", _ROJO_NO, False
+
+
+def _progreso_del_dataset(estado: EstadoRevision, cfg) -> str:
+    """Que decir debajo de SIN MODELO.
+
+    "todavia no hay modelo entrenado" era cierto y a la vez inutil: no dice que el modelo
+    se construye juntando fotos con a/r, ni cuantas faltan. Con el conteo a la vista, la
+    misma pantalla pasa de informar un faltante a mostrar un avance.
+    """
+    if not estado.conteos:
+        return "guarde fotos con APROBADA y RECHAZADA para entrenar"
+    meta = int(getattr(cfg.interfaz, "fotos_por_clase_objetivo", 0) or 0)
+    partes = []
+    for clase, cantidad in estado.conteos.items():
+        partes.append(f"{clase} {cantidad}/{meta}" if meta else f"{clase} {cantidad}")
+    if meta and all(c >= meta for c in estado.conteos.values()):
+        return "ya hay fotos suficientes: " + "  ".join(partes) + "  - listo para entrenar"
+    return "juntando fotos:  " + "  ".join(partes)
 
 
 def _boton_lindo(

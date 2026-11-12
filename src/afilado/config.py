@@ -103,6 +103,16 @@ class InterfazConfig:
     evaluar_en_vivo: bool = False
     nitidez_minima: float = 30.0
     frames_para_confirmar: int = 3
+    # Cuantas fotos por clase se apunta a juntar antes del primer entrenamiento. Es una
+    # META que se muestra en pantalla para que el operario sepa cuanto le falta, no un
+    # limite: el programa no deja de guardar al llegar.
+    #
+    # NO es un numero medido. Es la regla de pulgar habitual para ajustar un clasificador
+    # chico sobre un dominio estrecho y controlado --camara fija, luz fija, siempre el
+    # mismo tipo de pieza--, que es exactamente este caso. El numero de verdad sale recien
+    # cuando se entrena y se mira el acierto sobre las fotos de validacion: si queda bajo,
+    # hacen falta mas; si queda alto con pocas, alcanzo con menos.
+    fotos_por_clase_objetivo: int = 50
 
 
 @dataclass

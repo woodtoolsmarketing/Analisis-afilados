@@ -185,6 +185,21 @@ interfaz:
   # el veredicto parpadea con cada temblor de la mano, y un cartel que parpadea es un cartel
   # que el operario deja de mirar.
   frames_para_confirmar: 3
+  # META de fotos por clase antes del primer entrenamiento. Mientras no haya modelo, la
+  # pantalla muestra el avance abajo del cartel: "juntando fotos: aprobada 12/50
+  # rechazada 8/50", y avisa cuando las dos clases llegan.
+  #
+  # Es una meta, no un limite: el programa no deja de guardar al llegar, y mas fotos
+  # siempre vienen bien.
+  #
+  # NO es un numero medido. Es la regla de pulgar habitual para ajustar un clasificador
+  # chico sobre un dominio estrecho y controlado --camara fija, luz fija, siempre el mismo
+  # tipo de pieza--, que es este caso. El numero de verdad sale recien al entrenar y mirar
+  # el acierto sobre las fotos de validacion: si queda bajo, hacen falta mas.
+  #
+  # LAS DOS CLASES TIENEN QUE CRECER JUNTAS. Con 80 buenas y 3 malas no se entrena nada
+  # util: al modelo le conviene decir "buena" siempre y acierta el 96%.
+  fotos_por_clase_objetivo: 50
 
 detector:
   # Ruta al modelo entrenado. LA EXTENSION DECIDE COMO SE CORRE:
