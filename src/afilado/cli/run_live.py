@@ -888,7 +888,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         estado.conteos = almacen.conteo_por_clase()
         estado.botones_guardar = _destinos_rapidos(cfg)
         if memoria is not None:
-            memoria.sincronizar(conceptos.mapa())
+            memoria.sincronizar(conceptos.mapa(), guardar=not recalcular)
             if recalcular:
                 # Medirse cuesta, asi que se hace aca --justo despues de un cambio, con el
                 # operario mirando un cartel-- y no en medio de un veredicto.

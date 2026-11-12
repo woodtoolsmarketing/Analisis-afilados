@@ -401,7 +401,7 @@ class Memoria:
         return sum(1 for n in conteo.values() if n >= max(1, minimo_por_concepto)) >= 2
     # ------------------------------------------------------------------ carga
 
-    def sincronizar(self, mapa: dict[str, list[Path]]) -> tuple[int, int]:
+    def sincronizar(self, mapa: dict[str, list[Path]], guardar: bool = True) -> tuple[int, int]:
         """Pone la memoria al dia con las fotos que hay en disco.
 
         Devuelve (agregadas, sacadas). Solo lee del disco las fotos nuevas o cambiadas: el
@@ -462,7 +462,11 @@ class Memoria:
 
         if cambio:
             self._auto = None
-            self._guardar()
+            # Con guardar=False el llamador avisa que enseguida va a medirse, y esa
+            # medicion escribe la cache igual: escribirla dos veces por cada foto que se
+            # archiva son 166 ms de mas con 600 fotos, y el operario los siente.
+            if guardar:
+                self._guardar()
             _log.info(
                 "memoria: %d fotos (%d nuevas, %d que ya no estan)",
                 self.cantidad, agregadas, sacadas,
@@ -671,10 +675,13 @@ class Memoria:
         auto = self.autoevaluacion()
         if auto.total < 2:
             return f"memoria: {self.cantidad} fotos ({partes})"
+        # EL ACIERTO VA ADELANTE. Con muchos conceptos la linea no entra en el ancho de la
+        # pantalla, y lo que se perdia al cortarse por el borde era justamente el numero
+        # que importa; la enumeracion de conceptos tambien esta en el panel, fila por fila.
         sobre = " de las ultimas" if auto.recortada else " de"
         return (
-            f"memoria: {self.cantidad} fotos ({partes})  -  acierta "
-            f"{auto.aciertos}{sobre} {auto.total} que tiene guardadas"
+            f"memoria: acierta {auto.aciertos}{sobre} {auto.total} fotos que tiene "
+            f"guardadas  -  {self.cantidad} en total ({partes})"
         )
 
     # ------------------------------------------------------------------ disco

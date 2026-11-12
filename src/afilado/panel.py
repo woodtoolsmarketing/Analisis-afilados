@@ -104,7 +104,10 @@ class Miniaturas:
     pantalla se arrastraria. Se leen cuando cambia la pagina y se quedan en memoria.
     """
 
-    def __init__(self, lado: int = 180, tope: int = 48) -> None:
+    def __init__(self, lado: int = 300, tope: int = 48) -> None:
+        # 300 y no 180: la celda de la grilla es mas ancha que eso, asi que con 180 la
+        # miniatura se AGRANDABA para llenarla y la foto se veia mas borrosa de lo que es.
+        # Con el tope de 48 el cache ocupa unos 10 MB, que en esta PC no es problema.
         self._lado = int(lado)
         self._tope = int(tope)
         self._cache: dict[str, Optional[np.ndarray]] = {}
@@ -246,9 +249,14 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
                        _TEXTO_TENUE, 17, True))
         elegido = estado.concepto_elegido
         if elegido is not None:
-            lineas.append((elegido.nombre.upper(),
-                           (x_vista + 6, _ALTO_CABECERA + alto_vista + 36),
-                           _VERDE_OK, 24, True))
+            # Se achica hasta que entre: un nombre largo se cortaba contra el borde del
+            # lienzo, y lo que quedaba a la vista podia ser otro concepto.
+            nombre = elegido.nombre.upper()
+            tamano = 24
+            while tipografia.medir(nombre, tamano, True)[0] > ancho_vista - 12 and tamano > 13:
+                tamano -= 2
+            lineas.append((nombre, (x_vista + 6, _ALTO_CABECERA + alto_vista + 36),
+                           _VERDE_OK, tamano, True))
 
     y = _ALTO_CABECERA
     tope = alto - _ALTO_BOTONES - _MARGEN - 30
@@ -294,8 +302,12 @@ def _dibujar_lista(lienzo, estado: EstadoPanel, botones: dict, etiquetas: list) 
         if indice < 9:
             lineas.append((f"{indice + 1}", (_MARGEN + 44, y + 12), _TEXTO_TENUE, 17, False))
         lineas.append((concepto.nombre, (_MARGEN + 68, y + 8), _TEXTO, 24, True))
+        # La segunda columna arranca DESPUES del nombre, no en una posicion fija: un
+        # nombre de 24 letras se montaba encima del texto de los aciertos.
+        ancho_nombre, _ = tipografia.medir(concepto.nombre, 24, negrita=True)
+        x_aciertos = max(_MARGEN + 68 + 300, _MARGEN + 68 + ancho_nombre + 20)
         lineas.append((_texto_aciertos(estado, concepto),
-                       (_MARGEN + 68 + 300, y + 13), _TEXTO_TENUE, 18, False))
+                       (x_aciertos, y + 13), _TEXTO_TENUE, 18, False))
         botones[f"elegir:{indice}"] = (_MARGEN, y, _MARGEN + ancho_lista, y + _ALTO_FILA - 8)
         y += _ALTO_FILA
 
