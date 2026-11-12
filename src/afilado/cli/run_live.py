@@ -36,6 +36,7 @@ import cv2
 import numpy as np
 
 from .. import dientes, overlay, panel, revision
+from ..automatico import CapturaAutomatica, Resultado
 from ..referencias import GaleriaReferencias
 from ..almacen import AlmacenClasificacion, AlmacenFeedback
 from ..camara import Camara, enumerar_camaras
@@ -384,6 +385,47 @@ def _foto_de_ejemplo(juicio, ejemplos: dict):
             ejemplos.clear()
         ejemplos[propio.archivo] = cv2.imread(propio.archivo)
     return ejemplos[propio.archivo]
+
+
+def _barra_de_la_sierra(orden) -> list[str]:
+    """Un cuadrito por diente de la sierra que se esta revisando, para la pantalla."""
+    if orden is None:
+        return []
+    sierra = orden.sierra()
+    if sierra is None:
+        return []
+    barra = []
+    for diente in sierra.revisados:
+        if not diente.revisado:
+            barra.append("falta")
+        elif diente.aprobado is True:
+            barra.append("bien")
+        elif diente.aprobado is False:
+            barra.append("mal")
+        else:
+            barra.append("duda")
+    return barra
+
+
+def _resultado_del_diente(estado: revision.EstadoRevision, cfg: AppConfig) -> Optional[Resultado]:
+    """El veredicto que la captura automatica va a confirmar, o None si no hay.
+
+    Se usa el PRIMER diente de la imagen. Con la sierra pasando de a uno es el unico que
+    hay; si entraran dos, anotar el de la izquierda y seguir es mejor que anotar los dos
+    juntos como si fueran el mismo.
+    """
+    if not estado.dientes:
+        return None
+    diente = estado.dientes[0]
+    if diente.aprobado is None and diente.concepto is None:
+        return None
+    origen = "la memoria" if diente.juicio is not None else "comparando con la foto de modelo"
+    return Resultado(
+        estado=diente.concepto,
+        parecido=diente.parecido,
+        aprobado=diente.aprobado,
+        origen=f"{origen}, anotado solo",
+    )
 
 
 def _lista_para_panel(conceptos: Conceptos, galeria: GaleriaReferencias) -> list[Concepto]:
@@ -1056,6 +1098,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     miniaturas = panel.Miniaturas()
     # Las fotos de ejemplo que se muestran al lado de cada diente, leidas una sola vez.
     ejemplos: dict = {}
+    # La captura automatica: con una orden abierta, el programa anota los dientes solo.
+    automatica = CapturaAutomatica(
+        segundos_entre_fotos=cfg.interfaz.segundos_entre_fotos,
+        iguales_para_anotar=cfg.interfaz.fotos_iguales_para_anotar,
+    )
     alto_lienzo = revision.ALTO_MINIMO_LIENZO
 
     def refrescar(recalcular: bool = True) -> None:
@@ -1170,6 +1217,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         """Pone en la pantalla en que diente va la orden, si hay una abierta."""
         orden = ordenes.abierta
         estado.orden_resumen = orden.resumen() if orden is not None else ""
+        estado.barra_dientes = _barra_de_la_sierra(orden)
         if pan is not None:
             pan.orden = orden
 
@@ -1275,6 +1323,39 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     if len(estado.dientes) == 1:
                         estado.juicio = estado.dientes[0].juicio
                     estado.parecido = revision.parecido(a_mostrar, referencia)
+            # LA CAPTURA AUTOMATICA. Con una orden abierta y la imagen en vivo, el
+            # programa mira una foto por segundo, la juzga, la tira, y cuando varias
+            # seguidas dan lo mismo anota ese diente y pasa al siguiente. El operario
+            # mueve la sierra y no toca una tecla.
+            if (ordenes.abierta is not None and not estado.congelado and pan is None
+                    and cfg.interfaz.segundos_entre_fotos > 0):
+                confirmado = automatica.mirar(
+                    vivo, time.monotonic(), _resultado_del_diente(estado, cfg)
+                )
+                estado.progreso_automatico = automatica.progreso()
+                if confirmado is not None:
+                    orden = ordenes.abierta
+                    anotado = orden.anotar(
+                        estado=confirmado.estado,
+                        parecido=confirmado.parecido,
+                        aprobado=confirmado.aprobado,
+                        origen=confirmado.origen,
+                    )
+                    ordenes.guardar()
+                    actualizar_orden()
+                    if anotado is None:
+                        estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
+                    else:
+                        sierra = orden.sierra()
+                        cuantos = sierra.dientes if sierra is not None else 0
+                        estado.mensaje = (
+                            f"DIENTE {anotado.numero} de {cuantos}: "
+                            f"{confirmado.estado or 'sin decidir'}"
+                        )
+                    expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+            else:
+                estado.progreso_automatico = ""
+
             estado.referencia_faltante = referencia is None
             estado.nombre_referencia = galeria.nombre_actual
             estado.posicion_referencia = galeria.posicion
@@ -1364,6 +1445,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     ),
                     orden=ordenes.abierta,
                 )
+                automatica.reiniciar()
                 if accion == "orden":
                     pan.modo = panel.MODO_ORDEN
                     pan.cargando_orden = ordenes.abierta is None
@@ -1373,6 +1455,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 congelado = vivo.copy()
                 estado.congelado = True
                 juzgado = False
+                automatica.reiniciar()
                 estado.esperando_foco = False
                 # En vivo ya hay un veredicto confirmado para esta imagen: se congela ese,
                 # en vez de volver a clasificar y arriesgar que salga otro distinto justo
@@ -1384,6 +1467,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             elif accion == "seguir":
                 estado.congelado = False
                 juzgado = False
+                automatica.reiniciar()
                 estado.veredicto = None
                 estado.nitidez = None
                 estado.esperando_foco = False

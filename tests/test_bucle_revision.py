@@ -391,3 +391,74 @@ def test_con_un_diente_todo_sigue_como_antes(taller: Path, monkeypatch) -> None:
     _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
 
     assert len(_fotos(taller, "aprobada")) == 1
+
+
+# ---------------------------------------------------------------------------
+# La captura automatica dentro del bucle
+# ---------------------------------------------------------------------------
+
+
+def _correr_automatico(taller: Path, monkeypatch, camara, teclas, dientes: int = 6):
+    """Arranca una orden, pone esa camara y deja correr el bucle."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, dientes))
+    # Una foto de modelo, para que haya contra que comparar y exista un veredicto.
+    modelo = taller / "data" / "referencia" / "microscopio" / "modelo.jpg"
+    modelo.parent.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(modelo), _diente(0))
+
+    monkeypatch.setattr(run_live, "Camara", camara)
+    pendientes = list(teclas)
+
+    def _waitKey(_e: int = 0) -> int:
+        return pendientes.pop(0) if pendientes else _ESC
+
+    monkeypatch.setattr(cv2, "waitKey", _waitKey)
+    cfg = config_mod.AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+    cfg.interfaz.modo = "simple"
+    cfg.interfaz.evaluar_en_vivo = True
+    cfg.interfaz.nitidez_minima = 1.0
+    cfg.interfaz.segundos_entre_fotos = 0.05      # para no esperar cinco segundos reales
+    cfg.detector.tarea = "classify"
+    cfg.memoria.minimo_por_concepto = 1
+    run_live._ejecutar_revision(cfg, argparse.Namespace(grabar=None))
+    return Ordenes(str(taller / "data" / "ordenes")).abierta
+
+
+class _Quieta(_CamaraFalsa):
+    """La misma pieza, quieta: solo el temblor del sensor."""
+
+    def leer(self):
+        self.leidos += 1
+        base = _diente(0)
+        ruido = np.random.default_rng(self.leidos).integers(-2, 3, base.shape, dtype=np.int16)
+        return np.clip(base.astype(np.int16) + ruido, 0, 255).astype(np.uint8)
+
+
+def test_con_la_orden_abierta_el_diente_se_anota_solo(taller: Path, monkeypatch) -> None:
+    """El operario pasa la sierra y no toca una tecla."""
+    orden = _correr_automatico(taller, monkeypatch, _Quieta, [255] * 400 + [ord("q")])
+
+    assert orden is not None
+    assert orden.total_revisados >= 1
+    primero = orden.sierras[0].revisados[0]
+    assert "anotado solo" in primero.origen
+
+
+def test_una_sierra_quieta_no_llena_el_informe_sola(taller: Path, monkeypatch) -> None:
+    """La prueba que mas importa: sin mover la pieza, se anota UN diente y nada mas.
+
+    Sin esto, una sierra olvidada sobre la mesa diria en el informe que se reviso entera
+    diente por diente, y ese informe es justo el que contesta un reclamo."""
+    orden = _correr_automatico(taller, monkeypatch, _Quieta, [255] * 1200 + [ord("q")])
+
+    assert orden.total_revisados == 1
+
+
+def test_sin_orden_abierta_no_se_anota_nada(taller: Path, monkeypatch) -> None:
+    """La captura automatica es de la orden: sin orden, el programa no cuenta dientes."""
+    monkeypatch.setattr(run_live, "Camara", _Quieta)
+    _correr([255] * 400 + [ord("q")], monkeypatch)
+
+    assert _ordenes(taller).abierta is None

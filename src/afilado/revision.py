@@ -111,6 +111,12 @@ class EstadoRevision:
     # Los dientes encontrados en la imagen, cada uno con lo suyo. Vacio = la pantalla se
     # dibuja como siempre, juzgando la foto entera.
     dientes: list[DienteEnPantalla] = field(default_factory=list)
+    # Como viene la sierra de la orden abierta, un cuadrito por diente: "bien", "mal",
+    # "duda" o "falta". Vacio = no hay orden y no se dibuja nada.
+    barra_dientes: list[str] = field(default_factory=list)
+    # Que esta haciendo la captura automatica, para que el operario sepa si tiene que
+    # esperar o mover la pieza.
+    progreso_automatico: str = ""
 
 
 @dataclass
@@ -878,6 +884,34 @@ def _boton_lindo(
 _AREA_PARA_DIBUJAR = 0.60
 
 
+_COLORES_BARRA = {
+    "bien": _VERDE_OK,
+    "mal": _ROJO_NO,
+    "duda": _AMBAR,
+    "falta": _BORDE,
+}
+
+
+def _barra_de_dientes(lienzo, x1: int, y: int, x2: int, dientes: list[str]) -> None:
+    """Un cuadrito por diente de la sierra: como viene y cuanto falta, de un vistazo.
+
+    Va pegada abajo del cartel del veredicto y no en una pantalla aparte: el operario que
+    esta pasando diente por diente mira ahi, y tener que abrir el panel de la orden para
+    saber en cual va seria tener que soltar la pieza.
+    """
+    if not dientes:
+        return
+    ancho = x2 - x1
+    paso = max(3, min(26, ancho // max(1, len(dientes))))
+    alto = 22
+    for indice, estado in enumerate(dientes):
+        x = x1 + indice * paso
+        if x + paso - 2 > x2:
+            break
+        color = _COLORES_BARRA.get(estado, _BORDE)
+        cv2.rectangle(lienzo, (x, y), (x + max(2, paso - 3), y + alto), color, -1, cv2.LINE_AA)
+
+
 def _color_de(diente: "DienteEnPantalla") -> tuple:
     """Verde si ese diente paso, rojo si no, ambar si no se pudo decidir."""
     if diente.aprobado is True:
@@ -988,10 +1022,14 @@ def componer_simple(
     # abierta: es el dato que el operario necesita mirar entre diente y diente --en cual
     # va-- y no entra como aclaracion al costado de otra cosa.
     alto_orden = 28 if estado.orden_resumen else 0
+    # La barra de dientes va DEBAJO del cartel de APROBADO/DESAPROBADO, que es donde el
+    # operario ya esta mirando: asi ve el veredicto del diente y como viene la sierra sin
+    # mover la vista.
+    alto_barra = 34 if estado.barra_dientes else 0
     alto_cabecera, alto_resultado, alto_botones = (
         _ALTO_CABECERA + alto_orden, _ALTO_RESULTADO, _ALTO_BOTONES,
     )
-    alto_fijo = _ALTO_FIJO_SIMPLE + alto_orden
+    alto_fijo = _ALTO_FIJO_SIMPLE + alto_orden + alto_barra
     ancho_panel = (ANCHO_LIENZO - 3 * margen) // 2
     alto_img, ancho_img = vivo.shape[:2]
     alto_panel = max(220, int(ancho_panel * alto_img / max(1, ancho_img)))
@@ -1060,6 +1098,10 @@ def componer_simple(
     if valor is not None:
         _barra_coincidencia(lienzo, x_texto, cy + 36, ANCHO_LIENZO - margen - 30,
                             valor, float(cfg.interfaz.umbral_aprobacion), color)
+
+    if estado.barra_dientes:
+        _barra_de_dientes(lienzo, margen, y_res + alto_resultado + 8,
+                          ANCHO_LIENZO - margen, estado.barra_dientes)
 
     y1 = alto_total - alto_botones + 14
     y2 = y1 + 48
@@ -1141,6 +1183,12 @@ def componer_simple(
 
         if estado.orden_resumen:
             pincel.texto(estado.orden_resumen, (margen + 2, 6), _TEXTO, 19, True)
+            if estado.progreso_automatico:
+                # Al lado de la orden: el operario que esta pasando la sierra mira ahi, y
+                # necesita saber si tiene que esperar un segundo mas o mover la pieza.
+                ancho_o, _ = tipografia.medir(estado.orden_resumen, 19, negrita=True)
+                pincel.texto(estado.progreso_automatico,
+                             (margen + 2 + ancho_o + 28, 8), _TEXTO_TENUE, 17)
 
         if "conceptos" not in botones:
             # El boton no entro en la barra --nombres de concepto largos-- y entonces la

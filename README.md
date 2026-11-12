@@ -716,6 +716,42 @@ cada diente de esa sierra, con fecha y hora.
   no puede borrar dos horas de trabajo. Y si cerras el programa, al abrirlo retoma la orden
   donde estaba.
 
+#### Con la orden abierta, los dientes se anotan solos
+
+Pararse a apretar una tecla por diente son veinticuatro pulsaciones por sierra, y obliga a
+soltar la pieza. Con una orden abierta el programa **mira una foto por segundo, la juzga y
+la tira**; cuando **cinco seguidas son la misma foto con el mismo veredicto**, da ese diente
+por revisado, lo anota en la orden y pasa al siguiente. El operario mueve la sierra y no
+toca una tecla.
+
+Arriba, al lado de la orden, se ve en que esta: `mirando`, `confirmando: 3 de 5`, o
+`diente anotado - pase al siguiente`.
+
+**Por que cinco y no una.** Una sola foto puede agarrar el momento en que la pieza se esta
+acomodando, el reflejo de una lampara o la mano cruzando. Cinco seguidas que dan lo mismo
+quieren decir dos cosas a la vez: que la pieza esta **quieta** y que el veredicto es
+**estable**. Cualquiera de las dos sola no alcanza.
+
+> **Despues de anotar hay que mover la pieza.** Es lo que evita el peor error posible: que
+> una sierra olvidada sobre la mesa se anote veinticuatro veces sola y el informe diga que
+> se reviso entera sin que nadie la haya tocado. El corte de "la imagen cambio" es el mismo
+> que ya usa el programa para no guardar dos veces la misma foto, y esta medido: archivo
+> identico 0.0000, el mismo frame con otra exposicion 0.0063-0.0074, tomas realmente
+> distintas 0.0315-0.3296.
+
+**Las fotos no se guardan**: se miran y se tiran, lo que queda es el resultado en la orden.
+Juntar fotos para que el programa aprenda sigue siendo a mano con las teclas, eligiendo en
+que concepto va cada una.
+
+Se apaga con `interfaz.segundos_entre_fotos: 0` y se ajusta con
+`interfaz.fotos_iguales_para_anotar`.
+
+#### La barra de dientes, abajo del veredicto
+
+Debajo del cartel de APROBADO/DESAPROBADO aparece **un cuadrito por diente de la sierra**:
+verde el que paso, rojo el que no, ambar el que no se pudo decidir y gris el que falta. De
+un vistazo se ve como viene la sierra y cuanto queda, sin soltar la pieza ni abrir el panel.
+
 #### Las fotos de modelo
 
 El panel derecho no es una sola foto: es una **carpeta** con una por cada modelo de sierra,

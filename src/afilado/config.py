@@ -138,6 +138,20 @@ class InterfazConfig:
     #
     # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
     veredicto_por_parecido: bool = True
+    # CAPTURA AUTOMATICA, mientras hay una orden de afilado abierta: el programa mira una
+    # foto cada tanto, la juzga, la tira, y cuando varias seguidas dan LO MISMO da ese
+    # diente por revisado y lo anota en la orden. El operario pasa la sierra y no toca
+    # ninguna tecla.
+    #
+    # Una foto por segundo: el bucle corre a 17 cuadros por segundo y mirarlos todos seria
+    # confirmar un diente cada tres decimas. Con 0 se apaga y se anota a mano.
+    segundos_entre_fotos: float = 1.0
+    # Cuantas fotos seguidas tienen que dar lo mismo. Una sola puede agarrar el momento en
+    # que la pieza se acomoda, un reflejo o la mano cruzando; cinco seguidas iguales
+    # quieren decir dos cosas a la vez: que la pieza esta quieta y que el veredicto es
+    # estable. Despues de anotar hay que MOVER la pieza para que cuente la siguiente, que
+    # es lo que evita que una sierra olvidada sobre la mesa llene el informe sola.
+    fotos_iguales_para_anotar: int = 5
 
 
 @dataclass
