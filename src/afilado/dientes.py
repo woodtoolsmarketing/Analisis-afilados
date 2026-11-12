@@ -6,6 +6,33 @@ El operario apoya la sierra y casi siempre entra un diente, pero a veces entran 
 ahora el programa juzgaba la foto entera: con dos dientes adentro daba UN veredicto, que no
 era de ninguno de los dos. Y el informe de la orden necesita un resultado POR DIENTE.
 
+DOS VISTAS, DOS CAMINOS
+-----------------------
+El taller mira la sierra de dos maneras y la foto cambia por completo:
+
+    DE CERCA   un diente llena el cuadro. Su cara iluminada ES lo mas claro de la foto,
+               asi que Otsu la encuentra sola: 19 de 19 sobre las fotos del taller.
+    DE LEJOS   se ven el diente, el disco y los huecos. Aca el cuerpo del diente es lo mas
+               OSCURO, el disco es gris claro y granulado, y el hueco entre dientes esta
+               lustrado y brilla casi tanto como la placa de widia. "Lo mas claro" deja de
+               ser el diente, y el recuadro se iba al hueco: el taller lo vio en pantalla.
+
+Para la vista de lejos se usa otra cosa: LA CARA RAYADA. La placa de widia sale del
+esmeril con lineas marcadas, y ni el disco --granulado parejo-- ni el hueco --lustrado--
+las tienen. Medido sobre las 3 fotos crudas de esa vista, mirando las manchas que deja el
+10% mas brillante:
+
+    la cara del diente     rayado 32.7   39.9   44.8
+    el hueco iluminado     rayado 24.2   29.7   27.5
+    el borde del disco     rayado 24.9   22.5    -
+
+Se prueba primero el camino de siempre, y si devuelve un solo recuadro del tamano de la
+foto --senal de que junto el diente con el disco-- se pasa al de la cara rayada.
+
+OJO CON ESTO: el segundo camino esta medido sobre TRES fotos. Alcanza para que el recuadro
+caiga sobre el diente en vez del hueco, pero no para darlo por cerrado; con diez o quince
+fotos de esa vista hay que volver a correr la medicion y ajustar.
+
 COMO SE SEPARAN, SIN MODELO ENTRENADO
 --------------------------------------
 No hay red que detecte dientes --la base de fotos se esta juntando recien-- asi que la
@@ -87,6 +114,22 @@ class Diente:
         return frame[y1:y2, x1:x2]
 
 
+# Desde que tamano un recuadro deja de separar nada: si el unico que salio ocupa mas que
+# esto del cuadro, el corte por brillo junto el diente con el disco y hay que probar el
+# otro camino. Medido sobre las 3 fotos de la vista de lejos: el recuadro inutil ocupaba
+# 77%, 79% y 81% del cuadro.
+_AREA_SIN_SEPARAR = 0.60
+
+# El corte del segundo camino. La cara de widia esta en el 10% mas brillante de la foto;
+# Otsu, en cambio, corta por el medio y mete al disco en la misma bolsa que el diente.
+_PERCENTIL_CARA = 90
+
+# Cuanto puede bajar el puntaje de un recuadro respecto del mejor para seguir contando como
+# diente. Sirve para quedarse con el segundo diente cuando hay dos, sin quedarse tambien
+# con el reflejo del hueco, que puntua mucho mas bajo.
+_RELACION_SEGUNDO = 0.55
+
+
 def detectar(frame: Optional[np.ndarray], maximo: int = 4) -> list[Diente]:
     """Los dientes que hay en la imagen, de izquierda a derecha.
 
@@ -99,19 +142,21 @@ def detectar(frame: Optional[np.ndarray], maximo: int = 4) -> list[Diente]:
     entera = Diente(caja=(0, 0, ancho, alto), area=1.0, entero=True)
     try:
         gris = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gris = cv2.GaussianBlur(gris, (7, 7), 0)
-        _, mascara = cv2.threshold(gris, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, _NUCLEO)
-        mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, _NUCLEO)
-        encontrados = _componentes(mascara, (alto, ancho))
+        suave = cv2.GaussianBlur(gris, (7, 7), 0)
+        encontrados = _por_brillo(suave, (alto, ancho))
+        # SI EL CORTE POR BRILLO NO SEPARO NADA, se prueba por la CARA RAYADA. Con la
+        # sierra de lejos, Otsu mete el diente y el disco en la misma bolsa y devuelve un
+        # recuadro que es casi toda la foto. La cara de widia, en cambio, esta siempre en
+        # el 10% mas brillante y es lo mas rayado de la imagen: sale del esmeril con
+        # lineas marcadas, y ni el disco ni el hueco las tienen.
+        if _no_separo(encontrados, alto * ancho):
+            por_cara = _por_cara_rayada(gris, suave, (alto, ancho))
+            if por_cara:
+                encontrados = por_cara
     except cv2.error:
         return [entera]
 
     if not encontrados:
-        return [entera]
-    # El control se hace sobre TODO lo encontrado, antes de recortar la lista: que sobren
-    # dientes para el tope pedido no quiere decir que los recuadros esten mal puestos.
-    if not _tapan_el_filo(gris, encontrados):
         return [entera]
     # Los mas grandes primero para quedarse con los mejores, y despues de izquierda a
     # derecha, que es como los va a mirar el operario y como se numeran en la pantalla.
@@ -121,47 +166,65 @@ def detectar(frame: Optional[np.ndarray], maximo: int = 4) -> list[Diente]:
     return encontrados
 
 
-# Que parte de lo MAS BRILLANTE de la foto tiene que quedar adentro de los recuadros para
-# creerles. En un diente, lo mas brillante es la cara que corta --la placa de widia, o la
-# cara lustrada del filo-- y es justo lo que hay que mirar para decir si esta bien afilado.
-# Un recuadro que no la contiene no esta sobre un diente.
-#
-# Medido sobre las 21 fotos de microscopio que hay:
-#
-#     las 19 donde el recuadro cae bien     0.98 a 1.00  (mediana 1.00)
-#     el recuadro que cayo en el hueco      0.45
-#     el mismo diente, marcado a mano       0.94
-#
-# El corte va en 0.70, entre medio y lejos de los dos.
-_FRACCION_DEL_FILO = 0.70
-_PERCENTIL_FILO = 97
+def _por_brillo(suave: np.ndarray, forma: tuple[int, int]) -> list[Diente]:
+    """El camino de siempre: Otsu busca solo el corte entre claro y oscuro.
 
-
-def _tapan_el_filo(gris: np.ndarray, encontrados: list[Diente]) -> bool:
-    """Si los recuadros contienen lo mas brillante de la foto, que es el filo.
-
-    Se mira el CONJUNTO y no cada uno: con dos dientes a la vista, cada recuadro tiene la
-    mitad del brillo y los dos solos no pasarian.
-
-    Esto es el freno de mano. Con la sierra mas lejos --varios dientes y sus huecos-- lo
-    mas claro de la imagen puede ser el hueco iluminado y no el diente, y entonces el
-    recuadro cae sobre el hueco: el taller lo vio en pantalla. Cuando eso pasa es mejor
-    analizar la foto entera, como se venia haciendo, que recortar el pedazo equivocado:
-    un recorte del hueco archivado como "afilado" envenena la memoria sin que se note.
+    Es el que anda con el diente en primer plano, donde su cara iluminada ES lo mas claro
+    de la foto: 19 de 19 sobre las fotos del taller.
     """
-    try:
-        corte = float(np.percentile(gris, _PERCENTIL_FILO))
-    except (ValueError, TypeError):
-        return True
-    brillante = gris >= corte
-    total = float(brillante.sum())
-    if total <= 0:
-        return True
-    tapado = np.zeros(gris.shape, bool)
-    for diente in encontrados:
+    _, mascara = cv2.threshold(suave, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, _NUCLEO)
+    mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, _NUCLEO)
+    return _componentes(mascara, forma)
+
+
+def _no_separo(encontrados: list[Diente], total: int) -> bool:
+    """True si lo unico que salio es un recuadro del tamano de la foto."""
+    if len(encontrados) != 1:
+        return not encontrados
+    x1, y1, x2, y2 = encontrados[0].caja
+    return (x2 - x1) * (y2 - y1) >= _AREA_SIN_SEPARAR * total
+
+
+def _por_cara_rayada(
+    gris: np.ndarray, suave: np.ndarray, forma: tuple[int, int]
+) -> list[Diente]:
+    """El segundo camino: la cara de widia, que es lo mas claro Y lo mas rayado.
+
+    Medido sobre las 3 fotos crudas de la vista de lejos que mando el taller, mirando las
+    manchas que deja el 10% mas brillante:
+
+        la cara del diente     rayado 32.7   39.9   44.8
+        el hueco iluminado     rayado 24.2   29.7   27.5
+        el borde del disco     rayado 24.9   22.5    -
+
+    El rayado son las lineas que deja el esmeril en la placa: el disco es granulado parejo
+    y el hueco esta lustrado, ninguno de los dos las tiene. Se puntua cada mancha por
+    tamano x rayado y se queda con las que acompanan a la mejor.
+
+    OJO: esto esta medido sobre TRES fotos de esta vista. Es mejor que lo que habia --que
+    ponia el recuadro sobre el hueco-- pero tres fotos no son una medicion: cuando haya
+    diez o quince de la misma vista hay que volver a correr esto.
+    """
+    alto, ancho = forma
+    total = float(alto * ancho)
+    rayado = cv2.GaussianBlur(np.abs(cv2.Sobel(gris, cv2.CV_32F, 1, 0, ksize=3)), (0, 0), 5)
+    corte = float(np.percentile(gris, _PERCENTIL_CARA))
+    mascara = (gris > corte).astype(np.uint8) * 255
+    mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, _NUCLEO)
+    mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, _NUCLEO)
+
+    candidatos: list[tuple[float, Diente]] = []
+    for diente in _componentes(mascara, forma):
         x1, y1, x2, y2 = diente.caja
-        tapado[y1:y2, x1:x2] = True
-    return float((brillante & tapado).sum()) / total >= _FRACCION_DEL_FILO
+        puntaje = ((x2 - x1) * (y2 - y1) / total) * float(rayado[y1:y2, x1:x2].mean())
+        candidatos.append((puntaje, diente))
+    if not candidatos:
+        return []
+    mejor = max(p for p, _ in candidatos)
+    if mejor <= 0:
+        return []
+    return [d for p, d in candidatos if p >= _RELACION_SEGUNDO * mejor]
 
 
 def _componentes(mascara: np.ndarray, forma: tuple[int, int]) -> list[Diente]:
