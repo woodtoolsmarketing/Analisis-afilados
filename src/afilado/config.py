@@ -143,9 +143,17 @@ class InterfazConfig:
     # diente por revisado y lo anota en la orden. El operario pasa la sierra y no toca
     # ninguna tecla.
     #
-    # Una foto por segundo: el bucle corre a 17 cuadros por segundo y mirarlos todos seria
-    # confirmar un diente cada tres decimas. Con 0 se apaga y se anota a mano.
-    segundos_entre_fotos: float = 1.0
+    # Cada cuanto se mira una foto. Con 0.2 y cinco confirmaciones, el operario apoya el
+    # diente UN SEGUNDO y queda anotado.
+    #
+    # Arranco en 1.0 y era inusable: cinco fotos a una por segundo son CINCO SEGUNDOS de
+    # sierra quieta por diente, sostenida con la mano, sin que el porcentaje cruce el
+    # umbral ni una vez. En una sierra de 80 dientes son casi siete minutos de inmovilidad.
+    # El registro del taller lo mostro: con la orden abierta seis minutos, los siete
+    # dientes anotados decian "lo archivo el operario" y ninguno "anotado solo".
+    #
+    # Con 0 se apaga y se anota a mano con la tecla 'g'.
+    segundos_entre_fotos: float = 0.2
     # Cuantas fotos seguidas tienen que dar lo mismo. Una sola puede agarrar el momento en
     # que la pieza se acomoda, un reflejo o la mano cruzando; cinco seguidas iguales
     # quieren decir dos cosas a la vez: que la pieza esta quieta y que el veredicto es

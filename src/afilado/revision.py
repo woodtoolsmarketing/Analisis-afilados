@@ -1138,6 +1138,16 @@ def componer_simple(
         rect = _boton_lindo(lienzo, margen, y1, y2, "REVISAR", _AZUL, 24)
         botones["revisar"] = rect
         etiquetas.append(("REVISAR", rect, _AZUL))
+        # Con una orden abierta, el boton para anotar el diente a mano. Va en vivo y no
+        # congelado porque es ahi donde el operario esta pasando la sierra: anotar es
+        # decir "este ya lo mire", no archivar la foto.
+        if estado.orden_resumen:
+            x = rect[2] + 12
+            ancho_a, _ = tipografia.medir("ANOTAR DIENTE", 21, negrita=True)
+            if x + ancho_a + 2 * _RELLENO_BOTON < x_salir - 12:
+                rect_a = _boton_lindo(lienzo, x, y1, y2, "ANOTAR DIENTE", _VERDE_OK)
+                botones["anotar"] = rect_a
+                etiquetas.append(("ANOTAR DIENTE", rect_a, _VERDE_OK))
 
     rect_salir = _boton_lindo(lienzo, x_salir, y1, y2, "SALIR", _SUPERFICIE)
     botones["salir"] = rect_salir

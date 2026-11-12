@@ -487,3 +487,43 @@ def test_el_cartel_y_el_recuadro_dicen_lo_mismo(taller: Path, monkeypatch) -> No
     del_cartel, de_los_dientes = estados[-1]
     assert len(de_los_dientes) == 1
     assert del_cartel == pytest.approx(de_los_dientes[0])
+
+
+def test_la_tecla_g_anota_el_diente_sin_archivar_la_foto(taller: Path, monkeypatch) -> None:
+    """Son dos cosas distintas: archivar le ensena al programa y mete la foto en el
+    dataset; anotar dice 'este diente ya lo mire' y llena el informe."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+
+    _correr([ord("g"), ord("g"), ord("q")], monkeypatch)
+
+    guardada = _ordenes(taller).abierta
+    assert guardada.total_revisados == 2
+    assert "lo anoto el operario" in guardada.sierras[0].revisados[0].origen
+    # Y NO se archivo ninguna foto: el dataset no se toca.
+    assert _fotos(taller, "aprobada") == []
+
+
+def test_sin_orden_abierta_la_g_lo_dice(taller: Path, monkeypatch) -> None:
+    _correr([ord("g"), ord("q")], monkeypatch)
+
+    assert _ordenes(taller).abierta is None
+
+
+def test_el_boton_de_anotar_aparece_con_la_orden_abierta() -> None:
+    from afilado import revision
+    from afilado.config import AppConfig
+
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    imagen = np.full((480, 640, 3), 120, np.uint8)
+
+    sin_orden = revision.componer_simple(imagen, imagen, cfg, revision.EstadoRevision(), 672)
+    con_orden = revision.componer_simple(
+        imagen, imagen, cfg,
+        revision.EstadoRevision(orden_resumen="ORDEN 1234 - sierra 1 de 1 - diente 3 de 24"),
+        672,
+    )
+
+    assert "anotar" not in sin_orden.botones
+    assert "anotar" in con_orden.botones

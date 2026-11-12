@@ -551,6 +551,26 @@ class Memoria:
             juicio.zona = None
         return juicio
 
+    def mejor_parecido(self, imagen: np.ndarray) -> Optional[Vecino]:
+        """La foto guardada que MAS se parece a esta, mire el concepto que mire.
+
+        Es el "cuanto se parece a lo que ya tengo" sin pedir un veredicto. Sirve para lo
+        que al taller le pasa el primer dia: hay catorce fotos pero todas en el mismo
+        concepto, asi que juzgar es imposible --no hay contra que comparar-- y sin embargo
+        esas catorce fotos dicen muchisimo mas que la unica foto de modelo que este
+        elegida. Medido sobre las fotos del taller, el parecido contra UNA foto suelta se
+        mueve entre 42% y 73% segun como se haya apoyado la pieza; contra el conjunto se
+        queda con la mejor, que es la que se parece al encuadre que se esta usando.
+        """
+        if self.cantidad == 0:
+            return None
+        try:
+            mini, bordes, forma = rasgos(imagen)
+        except cv2.error:
+            return None
+        vecinos, _ = self._vecinos_y_puntajes(mini, bordes, forma, excluir=None)
+        return vecinos[0] if vecinos else None
+
     def _indice_de(self, vecino: Vecino) -> int:
         return self._archivos.index(vecino.archivo)
 

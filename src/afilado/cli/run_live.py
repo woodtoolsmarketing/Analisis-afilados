@@ -325,6 +325,7 @@ def _destinos_rapidos(cfg: AppConfig) -> list[tuple[str, str, bool]]:
 
 def _analizar_dientes(
     frame, memoria, cfg: AppConfig, referencia, ejemplos: dict, referencia_entera=None,
+    todas_las_modelo=None,
 ) -> list[revision.DienteEnPantalla]:
     """Separa los dientes de la imagen y juzga CADA UNO por su cuenta.
 
@@ -347,6 +348,13 @@ def _analizar_dientes(
     listos = memoria is not None and memoria.lista_para_juzgar(
         cfg.memoria.minimo_por_concepto
     )
+    # TODAVIA NO PUEDE JUZGAR PERO YA TIENE FOTOS. Es lo que pasa el primer dia: todas las
+    # fotos en un solo concepto, asi que no hay contra que comparar y un veredicto es
+    # imposible. Pero esas fotos dicen muchisimo mas que la unica foto de modelo elegida,
+    # asi que el parecido se mide contra TODAS ellas y se muestra el de la que mas se
+    # parece. Medido sobre las fotos del taller, contra una foto suelta el numero se mueve
+    # entre 42% y 73% segun como se haya apoyado la pieza.
+    con_memoria = (not listos) and memoria is not None and memoria.cantidad > 0
     en_pantalla: list[revision.DienteEnPantalla] = []
     for indice, encontrado in enumerate(encontrados):
         recorte = encontrado.recortar(frame)
@@ -364,6 +372,16 @@ def _analizar_dientes(
                 concepto = juicio.concepto
                 aprobado = concepto not in cfg.clases_defecto
                 ejemplo = _foto_de_ejemplo(juicio, ejemplos)
+        elif con_memoria:
+            vecino = memoria.mejor_parecido(recorte if not uno_solo else frame)
+            if vecino is not None:
+                parecido = vecino.parecido
+                concepto = vecino.concepto
+                aprobado = (
+                    parecido >= float(cfg.interfaz.umbral_parecido)
+                    and concepto not in cfg.clases_defecto
+                )
+                ejemplo = _foto_por_ruta(vecino.archivo, ejemplos)
         else:
             # CONTRA EL DIENTE DE LA FOTO DE MODELO, no contra la foto entera. Comparar un
             # recorte de diente contra un cuadro completo es comparar dos cosas distintas:
@@ -371,8 +389,18 @@ def _analizar_dientes(
             # contra cuadro, 45% recorte contra recorte y 25% recorte contra cuadro. Ese
             # 25% es el que aparecia en rojo sobre el diente mientras el cartel decia
             # APROBADO en verde, con los dos numeros sacados de la misma pieza.
-            contra = referencia_entera if uno_solo and referencia_entera is not None else referencia
-            parecido = revision.parecido(frame if uno_solo else recorte, contra)
+            mirar = frame if uno_solo else recorte
+            if uno_solo and todas_las_modelo:
+                # Contra TODAS las fotos de modelo, quedandose con la mejor.
+                valores = [revision.parecido(mirar, m) for m in todas_las_modelo]
+                valores = [v for v in valores if v is not None]
+                parecido = max(valores) if valores else None
+            else:
+                contra = (
+                    referencia_entera if uno_solo and referencia_entera is not None
+                    else referencia
+                )
+                parecido = revision.parecido(mirar, contra)
             if parecido is not None and getattr(cfg.interfaz, "veredicto_por_parecido", False):
                 aprobado = parecido >= float(cfg.interfaz.umbral_parecido)
         en_pantalla.append(
@@ -382,6 +410,15 @@ def _analizar_dientes(
             )
         )
     return en_pantalla
+
+
+def _foto_por_ruta(ruta: str, ejemplos: dict):
+    """Una foto guardada, leida una sola vez."""
+    if ruta not in ejemplos:
+        if len(ejemplos) > 24:
+            ejemplos.clear()
+        ejemplos[ruta] = cv2.imread(ruta)
+    return ejemplos[ruta]
 
 
 def _foto_de_ejemplo(juicio, ejemplos: dict):
@@ -1228,6 +1265,31 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         return mensaje
 
     recortes_modelo: dict = {}
+    fotos_modelo: dict = {}
+
+    def todas_las_de_modelo() -> list:
+        """Todas las fotos de modelo de la galeria, leidas una sola vez.
+
+        El parecido se mide contra la MEJOR de todas y no contra la que este elegida:
+        medido sobre las fotos del taller, contra una sola foto ningun diente bueno pasaba
+        el 70% --mediana 57%-- y contra las tres pasaban diez de catorce, con mediana 78%.
+        El numero no cambio porque el filo cambiara: cambio porque antes se lo comparaba
+        contra el encuadre equivocado.
+        """
+        carpeta = galeria.carpeta
+        if not carpeta.is_dir():
+            return []
+        nombres = sorted(
+            p.name for p in carpeta.iterdir()
+            if p.is_file() and p.suffix.lower() in EXTENSIONES
+        )
+        if set(nombres) != set(fotos_modelo):
+            fotos_modelo.clear()
+            for nombre in nombres[:24]:
+                imagen = cv2.imread(str(carpeta / nombre))
+                if imagen is not None:
+                    fotos_modelo[nombre] = imagen
+        return list(fotos_modelo.values())
 
     def recorte_modelo(referencia):
         """El DIENTE de la foto de modelo, recortado igual que el de la camara.
@@ -1351,6 +1413,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     estado.dientes = _analizar_dientes(
                         a_mostrar, memoria, cfg, recorte_modelo(referencia), ejemplos,
                         referencia_entera=referencia,
+                        todas_las_modelo=todas_las_de_modelo(),
                     )
                     # Con UN solo diente --lo normal-- el cartel grande sigue siendo el de
                     # siempre, con lo que ese diente dio. Con varios, cada uno tiene lo
@@ -1460,6 +1523,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 accion = "conceptos"
             elif tecla == ord("o"):
                 accion = "orden"
+            elif tecla == ord("g"):
+                accion = "anotar"
             elif tecla in _TECLAS_DIGITO and len(estado.dientes) > 1:
                 # Con varios dientes a la vista hay que decir cual se archiva: marcar los
                 # dos con el mismo estado de un saque seria etiquetar mal el que no se
@@ -1474,6 +1539,37 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if accion == "salir":
                 break
+            if accion == "anotar":
+                # ANOTAR EL DIENTE A MANO, sin archivar la foto. Son dos cosas distintas:
+                # archivar le ensena al programa --y mete la foto en el dataset-- mientras
+                # que anotar dice "este diente ya lo mire" y llena el informe. El taller
+                # pidio poder hacer lo segundo sin lo primero.
+                orden = ordenes.abierta
+                if orden is None:
+                    estado.mensaje = "NO HAY ORDEN ABIERTA - abrila con 'o'"
+                else:
+                    resultado = _resultado_del_diente(estado, cfg)
+                    anotado = orden.anotar(
+                        estado=resultado.estado if resultado else None,
+                        parecido=resultado.parecido if resultado else None,
+                        aprobado=resultado.aprobado if resultado else None,
+                        origen="lo anoto el operario",
+                    )
+                    ordenes.guardar()
+                    actualizar_orden()
+                    automatica.reiniciar()
+                    if anotado is None:
+                        estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
+                    else:
+                        sierra = orden.sierra()
+                        estado.mensaje = (
+                            f"DIENTE {anotado.numero} de "
+                            f"{sierra.dientes if sierra else '?'}: "
+                            f"{anotado.estado or 'sin decidir'}"
+                        )
+                expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
+                continue
+
             if accion in ("conceptos", "orden"):
                 pan = panel.EstadoPanel(
                     conceptos=_lista_para_panel(conceptos, galeria),
