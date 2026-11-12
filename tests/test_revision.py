@@ -784,8 +784,7 @@ def test_el_recuadro_de_cada_diente_se_dibuja(cfg: AppConfig) -> None:
 
     # _color_pintado mira solo la tarjeta del resultado; los recuadros van sobre la foto.
     for color in (revision._VERDE_OK, revision._ROJO_NO):
-        pintados = (pantalla.imagen == np.array(color, np.uint8)).all(axis=2).sum()
-        assert pintados > 500, f"no se dibujo el recuadro {color}"
+        assert _pintado_en_la_foto(pantalla, color) > 500, f"no se dibujo el recuadro {color}"
 
 
 def test_un_diente_que_ocupa_toda_la_foto_no_lleva_recuadro(cfg: AppConfig) -> None:
@@ -816,3 +815,59 @@ def test_con_dos_dientes_la_derecha_muestra_un_ejemplo_de_cada_uno(cfg: AppConfi
     derecha = pantalla.imagen[:, revision.ANCHO_LIENZO // 2:]
     assert (np.abs(derecha.astype(int) - 200) < 12).any()
     assert (np.abs(derecha.astype(int) - 60) < 12).any()
+
+
+def _pintado_en_la_foto(pantalla, color) -> int:
+    """Cuantos pixeles de ese color hay SOBRE LA FOTO.
+
+    No se puede mirar el lienzo entero: la fila de botones de abajo tiene un boton verde y
+    uno rojo fijos, asi que daria positivo siempre.
+    """
+    arriba = pantalla.imagen[: int(pantalla.imagen.shape[0] * 0.62)]
+    return int((arriba == np.array(color, np.uint8)).all(axis=2).sum())
+
+
+def test_un_recuadro_que_abarca_casi_todo_no_se_dibuja(cfg: AppConfig) -> None:
+    """Paso en el taller: el programa no logro separar el diente, devolvio la foto entera
+    y la pantalla mostro un recuadro gigante alrededor de todo. No dice cual diente se
+    esta mirando --no hay otro-- tapa la pieza y parece que el programa se rompio."""
+    imagen = _imagen()
+    alto, ancho = imagen.shape[:2]
+    estado = revision.EstadoRevision(
+        congelado=True,
+        dientes=[_en_pantalla(caja=(0, int(alto * 0.15), int(ancho * 0.9), alto))],
+    )
+
+    pantalla = revision.componer_simple(imagen, imagen, cfg, estado, 672)
+
+    assert _pintado_en_la_foto(pantalla, revision._VERDE_OK) < 500,         "no tendria que haberse dibujado el recuadro"
+
+
+def test_un_recuadro_chico_si_se_dibuja(cfg: AppConfig) -> None:
+    """El otro lado: cuando senala un pedazo de la foto, el recuadro es util."""
+    imagen = _imagen()
+    alto, ancho = imagen.shape[:2]
+    estado = revision.EstadoRevision(
+        congelado=True,
+        dientes=[_en_pantalla(caja=(int(ancho * 0.2), int(alto * 0.2),
+                                    int(ancho * 0.6), int(alto * 0.7)))],
+    )
+
+    pantalla = revision.componer_simple(imagen, imagen, cfg, estado, 672)
+
+    assert _pintado_en_la_foto(pantalla, revision._VERDE_OK) > 500
+
+
+def test_con_dos_dientes_los_recuadros_se_dibujan_aunque_sean_grandes(cfg: AppConfig) -> None:
+    """Aca si hacen falta: son los que dicen CUAL es cual."""
+    imagen = _imagen()
+    alto, ancho = imagen.shape[:2]
+    estado = revision.EstadoRevision(congelado=True, dientes=[
+        _en_pantalla(caja=(0, 0, ancho // 2, alto)),
+        _en_pantalla(caja=(ancho // 2, 0, ancho, alto), aprobado=False, concepto="roto"),
+    ])
+
+    pantalla = revision.componer_simple(imagen, imagen, cfg, estado, 672)
+
+    for color in (revision._VERDE_OK, revision._ROJO_NO):
+        assert _pintado_en_la_foto(pantalla, color) > 500

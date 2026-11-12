@@ -869,6 +869,15 @@ def _boton_lindo(
     return (x, y1, x2, y2)
 
 
+# Desde que parte del cuadro un recuadro deja de senalar algo. Medido sobre las fotos de
+# microscopio: cuando el recuadro cae BIEN sobre un diente en primer plano ocupa entre el
+# 44% y el 100% del cuadro --un diente de cerca es casi toda la foto-- y cuando el programa
+# no logra separar nada y devuelve la foto entera, ocupa 72% o mas. No se pueden separar
+# por el tamano, asi que lo que se decide aca es solo si DIBUJARLO: con un solo diente y un
+# recuadro asi de grande, no agrega nada y tapa la pieza.
+_AREA_PARA_DIBUJAR = 0.60
+
+
 def _color_de(diente: "DienteEnPantalla") -> tuple:
     """Verde si ese diente paso, rojo si no, ambar si no se pudo decidir."""
     if diente.aprobado is True:
@@ -890,9 +899,15 @@ def _marcar_dientes(
     textos: list[tuple[str, tuple[int, int], tuple, int, bool]] = []
     if not estado.dientes or vivo is None:
         return textos
-    if len(estado.dientes) == 1 and estado.dientes[0].caja[:2] == (0, 0):
+    # UN RECUADRO QUE ABARCA CASI TODO NO SE DIBUJA. El recuadro esta para decir CUAL
+    # diente se esta mirando; si es practicamente el borde del panel no dice nada, tapa la
+    # imagen y --esto es lo que paso en el taller-- parece que el programa se rompio. Se
+    # dibuja solo cuando senala algo: cuando hay mas de uno, o cuando el unico es
+    # bastante mas chico que el cuadro.
+    if len(estado.dientes) == 1:
+        x1, y1, x2, y2 = estado.dientes[0].caja
         alto_img, ancho_img = vivo.shape[:2]
-        if estado.dientes[0].caja == (0, 0, ancho_img, alto_img):
+        if (x2 - x1) * (y2 - y1) >= _AREA_PARA_DIBUJAR * alto_img * ancho_img:
             return textos
 
     escala, x0, y0 = _encaje(vivo, ancho_panel, alto_panel)
