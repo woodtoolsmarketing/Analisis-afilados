@@ -525,6 +525,34 @@ microscopio y se vea como se porta.
 
 #### Un resultado POR DIENTE
 
+> **HOY ESTO ESTA APAGADO** (`interfaz.recuadros_de_diente: false`), y el taller tuvo
+> razon en pedirlo: *"capta cualquier imagen"*.
+>
+> El detector esta construido sobre una sola idea --**la cara iluminada del diente es lo
+> mas claro de la foto**-- que era cierta con la luz de antes. Desde el 13/11 el taller
+> ilumina **a contraluz**: el diente sale negro contra un fondo blanco. Entonces el umbral
+> se queda con el fondo y el recuadro abarca todo. Medido sobre las dos fotos reales de
+> ese dia: caja `(0,0,640,480)` en las dos, el cuadro entero marcado como si fuera un
+> diente.
+>
+> Y tampoco era solo la luz nueva. Sobre imagenes donde **no hay ningun diente** que
+> encontrar:
+>
+> | lo que se le muestra | dibuja recuadro |
+> |---|---|
+> | la sierra entera de lejos o contra la pared | **65 de 66** |
+> | una mano delante del microscopio | si, del 29% del cuadro |
+> | un papel con una sombra | si, del 52% del cuadro |
+>
+> **Con esto apagado la pieza es LA FOTO**: se juzga el cuadro entero y se archiva el
+> cuadro entero. Eso ademas empareja la coleccion --todas las fotos del mismo tamano--
+> que es lo que evita que la memoria aprenda el encuadre en vez del filo.
+>
+> **Lo que se pierde**: el analisis de a dos dientes en una misma foto y las teclas `1..9`
+> para elegir cual se archiva. Para volver a encenderlo hay que arreglar antes el detector
+> para la luz a contraluz, donde el diente es lo mas **oscuro**. Lo que sigue abajo
+> describe como funciona cuando esta encendido.
+
 Lo normal es que entre **un diente** y se analice ese. Pero si entran dos --o tres-- el
 programa los separa y **juzga cada uno por su cuenta**: sobre cada diente aparece un
 recuadro con **su porcentaje**, verde si paso y rojo si no. El numero y no la palabra: el

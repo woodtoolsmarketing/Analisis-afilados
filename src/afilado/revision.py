@@ -881,7 +881,14 @@ def detalle_extra(estado: EstadoRevision, cfg: AppConfig) -> Optional[str]:
     # los 4 recortes de diente dan 39.0% a 68.6%, siendo todas la misma pieza para el. Lo
     # que separa esos dos grupos no es el filo: es el encuadre. Y si media coleccion se
     # junta de un modo y media del otro, el programa aprende eso.
-    if len(estado.dientes) == 1 and estado.dientes[0].entero:
+    # Solo cuando el programa ESTABA buscando dientes. Con los recuadros apagados la pieza
+    # es la foto a proposito, y avisar ahi seria un cartel permanente que no se puede
+    # obedecer.
+    if (
+        getattr(cfg.interfaz, "recuadros_de_diente", False)
+        and len(estado.dientes) == 1
+        and estado.dientes[0].entero
+    ):
         return "NO ENCUENTRO EL DIENTE: el numero es del cuadro entero - acerque la pieza"
 
     juicio = estado.juicio

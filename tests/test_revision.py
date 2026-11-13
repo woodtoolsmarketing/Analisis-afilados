@@ -947,12 +947,26 @@ def test_cuando_no_encuentra_el_diente_la_pantalla_lo_dice() -> None:
     diente 39.0%-68.6%, siendo todas la misma pieza para el. Lo que separa esos dos grupos
     es el encuadre, no el filo."""
     cfg = AppConfig(clases=["afilado"], clases_defecto=[])
+    cfg.interfaz.recuadros_de_diente = True
     entero = revision.DienteEnPantalla(
         caja=(0, 0, 640, 480), parecido=0.88, aprobado=True, entero=True,
     )
     estado = revision.EstadoRevision(congelado=True, parecido=0.88, dientes=[entero])
 
     assert "NO ENCUENTRO EL DIENTE" in (revision.detalle_extra(estado, cfg) or "")
+
+
+def test_con_los_recuadros_apagados_ese_aviso_no_aparece() -> None:
+    """Con interfaz.recuadros_de_diente en false la pieza es la foto A PROPOSITO, asi que
+    avisar seria un cartel permanente que el operario no puede obedecer."""
+    cfg = AppConfig(clases=["afilado"], clases_defecto=[])
+    assert cfg.interfaz.recuadros_de_diente is False, "de fabrica van apagados"
+    entero = revision.DienteEnPantalla(
+        caja=(0, 0, 640, 480), parecido=0.88, aprobado=True, entero=True,
+    )
+    estado = revision.EstadoRevision(congelado=True, parecido=0.88, dientes=[entero])
+
+    assert "NO ENCUENTRO EL DIENTE" not in (revision.detalle_extra(estado, cfg) or "")
 
 
 def test_con_el_diente_encontrado_no_aparece_ese_aviso() -> None:

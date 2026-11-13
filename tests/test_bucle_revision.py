@@ -80,8 +80,16 @@ def taller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return tmp_path
 
 
-def _correr(teclas: list[int], monkeypatch: pytest.MonkeyPatch) -> int:
-    """Corre el bucle mandandole esas teclas. Al quedarse sin teclas, sale."""
+def _correr(
+    teclas: list[int], monkeypatch: pytest.MonkeyPatch, recuadros: bool = False
+) -> int:
+    """Corre el bucle mandandole esas teclas. Al quedarse sin teclas, sale.
+
+    `recuadros` enciende interfaz.recuadros_de_diente, que de fabrica va apagado porque
+    con la luz a contraluz del taller el detector marca el cuadro entero. Las pruebas que
+    cuidan el analisis POR DIENTE lo encienden a mano: la funcion sigue existiendo y tiene
+    que seguir andando para el dia que el detector sepa trabajar con esa luz.
+    """
     pendientes = list(teclas)
 
     def _waitKey(_espera: int = 0) -> int:
@@ -98,6 +106,7 @@ def _correr(teclas: list[int], monkeypatch: pytest.MonkeyPatch) -> int:
     cfg.interfaz.modo = "simple"
     cfg.interfaz.evaluar_en_vivo = True
     cfg.interfaz.nitidez_minima = 1.0
+    cfg.interfaz.recuadros_de_diente = recuadros
     cfg.detector.tarea = "classify"
     cfg.memoria.minimo_por_concepto = 1
     return run_live._ejecutar_revision(cfg, argparse.Namespace(grabar=None))
@@ -346,7 +355,7 @@ def test_lo_que_se_archiva_es_el_RECORTE_del_diente(taller: Path, monkeypatch) -
     monkeypatch.setattr(run_live, "Camara", _Dos)
     entera = _dos_dientes()
 
-    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch, recuadros=True)
 
     guardada = cv2.imread(str(_fotos(taller, "aprobada")[0]))
     assert guardada.shape[1] < entera.shape[1] * 0.75
@@ -360,9 +369,9 @@ def test_la_tecla_2_cambia_cual_diente_se_guarda(taller: Path, monkeypatch) -> N
 
     monkeypatch.setattr(run_live, "Camara", _Dos)
 
-    _correr([_ESPACIO, ord("1"), ord("a"), ord("q")], monkeypatch)
+    _correr([_ESPACIO, ord("1"), ord("a"), ord("q")], monkeypatch, recuadros=True)
     primero = cv2.imread(str(_fotos(taller, "aprobada")[0]))
-    _correr([_ESPACIO, ord("2"), ord("r"), ord("q")], monkeypatch)
+    _correr([_ESPACIO, ord("2"), ord("r"), ord("q")], monkeypatch, recuadros=True)
     segundo = cv2.imread(str(_fotos(taller, "rechazada")[0]))
 
     assert primero.shape != segundo.shape or not np.array_equal(primero, segundo)
@@ -379,7 +388,7 @@ def test_con_dos_dientes_la_orden_anota_de_a_uno(taller: Path, monkeypatch) -> N
     monkeypatch.setattr(run_live, "Camara", _Dos)
     Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 6))
 
-    _correr([_ESPACIO, ord("1"), ord("a"), ord("2"), ord("r"), ord("q")], monkeypatch)
+    _correr([_ESPACIO, ord("1"), ord("a"), ord("2"), ord("r"), ord("q")], monkeypatch, recuadros=True)
 
     guardada = Ordenes(str(taller / "data" / "ordenes")).abierta
     assert guardada.total_revisados == 2
@@ -699,7 +708,7 @@ def test_congelado_cambiar_de_modelo_mueve_el_porcentaje(taller: Path, monkeypat
 
     monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
 
-    _correr([_ESPACIO, 255, ord("m"), 255, ord("m"), 255, ord("q")], monkeypatch)
+    _correr([_ESPACIO, 255, ord("m"), 255, ord("m"), 255, ord("q")], monkeypatch, recuadros=True)
 
     assert len(vistos) > 2, "no se llego a dibujar la pantalla congelada"
     assert len(set(vistos)) > 1, "se cambio de modelo y el porcentaje no se movio"
@@ -858,7 +867,7 @@ def test_dos_modelos_con_el_mismo_nombre_no_comparten_el_recorte(
 
     monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
 
-    _correr([255, ord("m"), 255, 255, ord("q")], monkeypatch)
+    _correr([255, ord("m"), 255, 255, ord("q")], monkeypatch, recuadros=True)
 
     assert len(set(vistos)) > 1, (
         "se paso a la otra foto de modelo y el parecido no se movio: comparten el recorte"
@@ -969,3 +978,64 @@ def test_la_g_sin_veredicto_deja_dicho_que_no_habia_veredicto(
     diente = _ordenes(taller).abierta.sierras[0].revisados[0]
     assert diente.estado is None and diente.aprobado is None
     assert diente.nota != "", "renglon contado como revisado, en blanco y sin explicacion"
+
+
+# ---------------------------------------------------------------------------
+# LOS RECUADROS, APAGADOS. El taller lo dijo asi: "capta cualquier imagen".
+# ---------------------------------------------------------------------------
+
+
+class _ContraluzFalsa(_CamaraFalsa):
+    """Como ilumina el taller desde el 13/11: el diente sale NEGRO contra un fondo
+    blanco. El detector busca lo MAS CLARO, asi que se queda con el fondo y el recuadro
+    abarca el cuadro entero: medido sobre las dos fotos reales de ese dia, caja
+    (0,0,640,480) en las dos."""
+
+    def leer(self):
+        self.leidos += 1
+        img = np.full((480, 640, 3), 235, np.uint8)
+        cv2.rectangle(img, (240, 60), (400, 420), (25, 25, 25), -1)
+        cv2.rectangle(img, (40, 180), (150, 440), (30, 30, 30), -1)
+        return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def test_con_la_luz_de_hoy_el_detector_marca_el_cuadro_entero() -> None:
+    """Por que se apagaron: el detector busca lo MAS CLARO y a contraluz el diente es lo
+    mas oscuro, asi que se queda con el fondo. Medido sobre las dos fotos reales que saco
+    el taller el 13/11 con esta luz: caja (0,0,640,480) en las dos, el cuadro entero
+    marcado como si fuera un diente."""
+    from afilado import dientes as D
+
+    imagen = _ContraluzFalsa().leer()
+    alto, ancho = imagen.shape[:2]
+
+    encontrados = D.detectar(imagen)
+
+    assert len(encontrados) == 1
+    x1, y1, x2, y2 = encontrados[0].caja
+    assert (x2 - x1) * (y2 - y1) >= 0.95 * alto * ancho, (
+        f"el recuadro no abarca todo: {encontrados[0].caja}"
+    )
+
+
+def test_apagados_lo_que_se_archiva_es_el_cuadro_entero(taller: Path, monkeypatch) -> None:
+    """Y esto es lo que empareja la coleccion. Mientras hubo recuadros, lo archivado salia
+    del recorte del diente elegido, y cuando el detector no separaba nada ese "recorte"
+    era el cuadro completo: en la coleccion del taller convivian fotos de 640x446 y de
+    253x257. Medido, la memoria separaba esos dos grupos 14 de 14 al 100% de confianza
+    sin mirar el filo ni una vez.
+
+    Se usa la camara de siempre --un diente CLARO sobre fondo oscuro-- porque esa es la
+    que el detector si recorta: con la de contraluz el recuadro es el cuadro entero y
+    archivaria lo mismo con los recuadros encendidos o apagados, o sea que no probaria
+    nada."""
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    fotos = _fotos(taller, "aprobada")
+    assert len(fotos) == 1
+    guardada = cv2.imread(str(fotos[0]))
+    entera = _diente(0)
+    assert guardada.shape[:2] == entera.shape[:2], (
+        f"se archivo un recorte de {guardada.shape[1]}x{guardada.shape[0]} en vez del "
+        f"cuadro entero de {entera.shape[1]}x{entera.shape[0]}"
+    )

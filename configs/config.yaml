@@ -220,6 +220,24 @@ interfaz:
   # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
   veredicto_por_parecido: true
 
+  # LOS RECUADROS SOBRE CADA DIENTE. Apagados por pedido del taller: "capta cualquier
+  # imagen", y es cierto.
+  #
+  # El detector busca lo MAS CLARO de la foto, porque con la luz de antes la cara del
+  # diente era lo mas claro. Desde el 13/11 el taller ilumina A CONTRALUZ y el diente sale
+  # NEGRO contra fondo blanco: entonces el umbral se queda con el fondo y el recuadro
+  # abarca todo. Medido sobre las dos fotos reales de ese dia: caja (0,0,640,480) en las
+  # dos. Y sobre imagenes donde no hay ningun diente que encontrar, dibuja recuadro en 65
+  # de 66 fotos de la sierra de lejos, sobre una mano (29% del cuadro) y sobre un papel
+  # con una sombra (52%).
+  #
+  # Apagado, la pieza es LA FOTO: se juzga el cuadro entero y se archiva el cuadro entero,
+  # que ademas empareja la coleccion y evita que la memoria aprenda el encuadre.
+  #
+  # Se pierde el analisis de a dos dientes y las teclas 1..9. Para volver a encenderlo hay
+  # que arreglar antes el detector para la luz a contraluz.
+  recuadros_de_diente: false
+
 # ---------------------------------------------------------------------------
 # LA MEMORIA: el programa aprende de cada foto que se archiva, sin entrenar nada.
 #

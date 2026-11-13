@@ -138,6 +138,31 @@ class InterfazConfig:
     #
     # En false, la pantalla muestra PARECIDO xx% en ambar sin juzgar.
     veredicto_por_parecido: bool = True
+    # LOS RECUADROS SOBRE CADA DIENTE. Apagados, y el taller tiene razon: "capta
+    # cualquier imagen".
+    #
+    # El detector esta construido sobre una sola idea --"la cara iluminada del diente es
+    # lo mas claro de la foto"-- que era cierta con la luz de antes. Hoy el taller ilumina
+    # A CONTRALUZ: el diente sale NEGRO contra un fondo blanco. Entonces Otsu se queda con
+    # el fondo y el recuadro abarca todo. Medido sobre las dos fotos que saco el taller el
+    # 13/11 con esta luz: caja (0,0,640,480) en las dos, o sea el cuadro entero marcado
+    # como si fuera un diente.
+    #
+    # Y no es solo la luz nueva. Medido sobre imagenes donde NO hay ningun diente que
+    # encontrar:
+    #
+    #     la sierra entera de lejos / contra la pared    65 de 66 con recuadro
+    #     una mano delante del microscopio               recuadro del 29% del cuadro
+    #     un papel con una sombra                        recuadro del 52% del cuadro
+    #
+    # Con esto apagado la pieza es LA FOTO: se juzga el cuadro entero y se archiva el
+    # cuadro entero. Eso ademas empareja la coleccion --todas las fotos del mismo tamano--
+    # que es lo que evita que la memoria aprenda el encuadre en vez del filo.
+    #
+    # LO QUE SE PIERDE: el analisis de a dos dientes en una misma foto y las teclas 1..9
+    # para elegir cual se archiva. Para volver a encenderlo hace falta antes arreglar el
+    # detector para la luz a contraluz, donde el diente es lo mas OSCURO.
+    recuadros_de_diente: bool = False
     # CAPTURA AUTOMATICA, mientras hay una orden de afilado abierta: el programa mira una
     # foto cada tanto, la juzga, la tira, y cuando varias seguidas dan LO MISMO da ese
     # diente por revisado y lo anota en la orden. El operario pasa la sierra y no toca

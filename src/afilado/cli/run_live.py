@@ -339,8 +339,17 @@ def _analizar_dientes(
     --primero la memoria, si no el parecido contra la foto de modelo-- pero medido sobre
     el recorte de ese diente y no sobre la foto completa. Con dos dientes adentro, juzgar
     la foto entera daba un numero que no era de ninguno de los dos.
+
+    CON interfaz.recuadros_de_diente EN FALSE --como esta de fabrica-- no se separa nada:
+    la pieza es LA FOTO. Ver el comentario del config para el por que, que es que el
+    detector busca lo mas claro y con la luz a contraluz de hoy el diente es lo mas
+    oscuro, asi que marcaba el cuadro entero.
     """
-    encontrados = dientes.detectar(frame, maximo=_MAX_DIENTES)
+    if not getattr(cfg.interfaz, "recuadros_de_diente", False):
+        alto, ancho = frame.shape[:2]
+        encontrados = [dientes.Diente(caja=(0, 0, ancho, alto), area=1.0, entero=True)]
+    else:
+        encontrados = dientes.detectar(frame, maximo=_MAX_DIENTES)
     if not encontrados:
         return []
     # CON UN SOLO DIENTE A LA VISTA, LA PIEZA ES LA FOTO. Ahi se compara cuadro contra
