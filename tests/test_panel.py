@@ -621,8 +621,13 @@ def test_saltear_un_diente_desde_la_pantalla(taller, tmp_path: Path) -> None:
 
     assert "DIENTE 1" in (mensaje or "")
     assert orden.diente().numero == 2
-    # Y quedo guardado en disco, no solo en memoria.
-    assert Ordenes(str(tmp_path / "ordenes")).abierta.total_revisados == 1
+    # Y quedo guardado en disco, no solo en memoria. SALTEADO, no revisado: el conteo
+    # avanza al diente 2 pero el informe no puede decir que se reviso uno, porque nadie lo
+    # miro. Esta assertion decia `total_revisados == 1` y era el defecto escrito como
+    # prueba: salteando los 24 dientes, el informe daba la sierra por revisada entera.
+    guardada = Ordenes(str(tmp_path / "ordenes")).abierta
+    assert guardada.total_revisados == 0
+    assert guardada.total_salteados == 1
 
 
 def test_el_informe_se_guarda_desde_la_pantalla(taller, tmp_path: Path) -> None:
@@ -660,3 +665,13 @@ def test_de_la_orden_se_vuelve_a_los_conceptos_sin_cerrar_el_panel(taller, tmp_p
     sigue, _ = _manejar(pan, conceptos, galeria, tecla=_ESC, ordenes=ordenes)
 
     assert sigue is True and pan.modo == panel.MODO_LISTA
+
+
+def test_el_formulario_avisa_que_el_numero_de_dientes_es_para_todas_las_sierras() -> None:
+    """Orden.nueva pone ese numero en TODAS las sierras de la orden, asi que una orden con
+    una sierra de 24 y otra de 36 no se puede cargar: hay que partirla en dos ordenes. Sin
+    decirlo, el operario pone un numero y el informe declara "SIERRA 2: 24 dientes, 24
+    revisados" de una sierra de 36."""
+    etiquetas = dict(panel.CAMPOS_ORDEN)
+
+    assert "Dientes por sierra (el mismo)" in etiquetas

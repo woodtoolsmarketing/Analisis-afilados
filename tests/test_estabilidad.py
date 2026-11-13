@@ -5,22 +5,28 @@ acierta": un veredicto que cambia porque la sierra se apoyo tres milimetros mas 
 inservible aunque acierte seguido. Quien lo usa pierde la confianza a la segunda vez que le
 pasa, y despues ya no la recupera.
 
-MEDIDO SOBRE LAS 19 FOTOS DE MICROSCOPIO DEL TALLER, perturbandolas como pasa de verdad al
-volver a apoyar la pieza:
+MEDIDO SOBRE LAS 14 FOTOS DEL MICROSCOPIO DE HOY (13/11/2026), perturbandolas como pasa de
+verdad al volver a apoyar la pieza, y mirando si el parecido se mantiene sobre el 70%:
 
-    quieta (control)        19 de 19     parecido 1.000
-    corrida 10 px           19 de 19              0.991
-    corrida 25 px           19 de 19              0.971
-    corrida 50 px           19 de 19              0.923
-    girada 3 grados         17 de 19              0.953
-    girada 7 grados         16 de 19              0.867
-    girada 15 grados        10 de 19              0.778
-    mas luz (+25%)          19 de 19              0.974
-    menos luz (-25%)        19 de 19              1.000
-    reapoyada de verdad     17 de 19              0.914   (14 px + 4 grados + 12% de luz)
+    quieta (control)        14 de 14     parecido 1.000
+    corrida 10 px           14 de 14              1.000
+    corrida 25 px           14 de 14              1.000
+    corrida 50 px           14 de 14              1.000
+    girada 3 grados         13 de 14              0.840
+    girada 7 grados          8 de 14              0.711
+    girada 15 grados         1 de 14              0.538
+    mas luz (+25%)          14 de 14              0.975
+    menos luz (-25%)        14 de 14              1.000
+    reapoyada de verdad     13 de 14              0.801   (14 px + 4 grados + 12% de luz)
+
+La tabla ANTERIOR estaba medida sobre 19 fotos de la camara que ya no se usa, y era mas
+indulgente con el giro: daba 10 de 19 a 15 grados donde hoy es 1 de 14. El corrimiento, en
+cambio, dejo de mover el numero del todo: con este encuadre aguanta 50 px sin perder un
+punto, porque matchTemplate busca el mejor calce.
 
 La conclusion practica, que esta escrita tambien en el README: correr la pieza y cambiar la
-luz NO mueven el veredicto; GIRARLA si. Conviene apoyarla siempre con la misma orientacion.
+luz NO mueven el veredicto; GIRARLA si, y mas de lo que se creia. Conviene apoyarla siempre
+con la misma orientacion.
 
 Estas pruebas repiten la medicion con imagenes sinteticas --las fotos del taller no viajan
 con el repositorio-- para que si alguien cambia la formula del parecido y rompe esta

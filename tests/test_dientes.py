@@ -204,3 +204,120 @@ def test_en_la_vista_de_lejos_el_recuadro_no_cae_en_el_hueco() -> None:
         return                                   # no separo nada: no inventa un recuadro
     centro_x = (x1 + x2) / 2
     assert centro_x > 200, "el recuadro se fue al hueco de la izquierda"
+
+
+# ---------------------------------------------------------------------------
+# CUAL DE LOS RECUADROS SE MIRA PRIMERO
+# ---------------------------------------------------------------------------
+
+
+def _cara_y_hueco() -> np.ndarray:
+    """Dos manchas claras del mismo tamano: a la izquierda el HUECO entre dientes, que
+    esta lustrado y sale liso, y a la derecha la cara de widia, que sale del esmeril con
+    lineas marcadas. Es lo que se ve en afilado_20261112_161626_660.jpg, donde el hueco
+    medido da 30.4 de rayado y la cara 43.6."""
+    img = np.full((480, 640, 3), 70, np.uint8)
+    cv2.rectangle(img, (60, 150), (260, 380), (185, 185, 185), -1)   # el hueco, liso
+    cv2.rectangle(img, (360, 150), (560, 380), (180, 180, 180), -1)  # la cara...
+    for x in range(360, 560, 6):                                     # ...rayada
+        cv2.line(img, (x, 150), (x, 380), (235, 235, 235), 2)
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def test_cuando_hay_hueco_y_diente_se_elige_el_diente() -> None:
+    """El hueco pasa el filtro de area igual que la cara, y cuando cae a la izquierda
+    quedaba PRIMERO: era el que se archivaba y el que iba al informe, con el diente de
+    verdad al lado sin elegir. Pasa en 1 de las 14 fotos de cerca del taller."""
+    encontrados = D.detectar(_cara_y_hueco())
+
+    assert len(encontrados) == 2
+    izquierda, derecha = encontrados
+    assert izquierda.caja[0] < derecha.caja[0]          # el orden en pantalla no cambia
+    assert derecha.rayado > izquierda.rayado
+    assert D.mas_parecido_a_diente(encontrados) == 1
+
+
+def test_con_un_solo_recuadro_no_se_gasta_en_medir_el_rayado() -> None:
+    """Son unos milisegundos de Sobel que en la PC del taller se notan, y con un solo
+    recuadro no hay nada que elegir."""
+    encontrados = D.detectar(_diente())
+
+    assert len(encontrados) == 1
+    assert encontrados[0].rayado == 0.0
+    assert D.mas_parecido_a_diente(encontrados) == 0
+
+
+def _inclinar(imagen: np.ndarray, grados: float) -> np.ndarray:
+    """La sierra la sostiene la mano del operario: no entra derecha."""
+    alto, ancho = imagen.shape[:2]
+    matriz = cv2.getRotationMatrix2D((ancho / 2.0, alto / 2.0), grados, 1.0)
+    return cv2.warpAffine(imagen, matriz, (ancho, alto), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+def test_con_la_sierra_inclinada_el_recuadro_sigue_en_la_cara_rayada() -> None:
+    """Con la sierra torcida, el que gana tiene que seguir siendo la cara rayada. Medido
+    sobre las 17 fotos reales por 9 inclinaciones de -20 a +20 grados, el recuadro
+    elegido cae en el diente en 110 de 126 casos y en el hueco en ninguno.
+
+    LO QUE ESTA PRUEBA NO CUIDA: aca las dos manchas se separan por rayado 4.5 contra
+    84.8, y en la foto real el margen es 30.4 contra 43.6. Medido, esta prueba pasa igual
+    midiendo el rayado con la magnitud del gradiente, con el maximo de |Sx| y |Sy| y
+    hasta con la derivada en y SOLA --que en la foto real le da el recuadro al hueco--.
+    Avisa si el recuadro se va al hueco con la sierra torcida; el margen no lo cuida
+    nadie: eso esta medido a mano en el docstring de _por_cara_rayada.
+    """
+    for grados in (-15, -10, -5, 5, 10, 15):
+        encontrados = D.detectar(_inclinar(_cara_y_hueco(), grados))
+
+        assert len(encontrados) == 2, f"a {grados} grados no salieron las dos manchas"
+        elegido = encontrados[D.mas_parecido_a_diente(encontrados)]
+        assert elegido.centro[0] > 320, f"a {grados} grados el recuadro se fue al hueco"
+
+
+def _sierra_que_llena_el_cuadro() -> np.ndarray:
+    """La sierra tan de cerca que el cuerpo del disco ocupa casi todo: el corte por
+    brillo junta todo en un recuadro del tamano del cuadro, y el de la cara rayada
+    tampoco separa nada --devuelve uno del 62%--."""
+    azar = np.random.default_rng(7)
+    img = np.full((480, 640, 3), 30, np.uint8)
+    img[20:450, 20:620] = azar.normal(140, 14, (430, 600, 3)).clip(0, 255).astype(np.uint8)
+    img[45:425, 60:580] = azar.normal(195, 30, (380, 520, 3)).clip(0, 255).astype(np.uint8)
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def test_si_el_segundo_camino_tampoco_separa_no_se_queda_con_su_recuadro() -> None:
+    """Un recuadro de 60% o mas no lo dibuja revision.py, asi que el operario no ve nada
+    mientras el programa archiva y juzga ese recorte. Pasa en 9 de 324 casos medidos (36
+    fotos reales por 9 inclinaciones): el 2do camino devuelve el 61%-65% del cuadro y se
+    lo queda. Si ninguno de los dos separo, que vuelva el del corte por brillo."""
+    imagen = _sierra_que_llena_el_cuadro()
+    alto, ancho = imagen.shape[:2]
+
+    encontrados = D.detectar(imagen)
+
+    assert len(encontrados) == 1
+    x1, y1, x2, y2 = encontrados[0].caja
+    assert (x2 - x1) * (y2 - y1) >= 0.80 * alto * ancho
+
+
+def test_un_recuadro_que_no_toca_la_imagen_queda_en_el_log(caplog) -> None:
+    """recortar() devuelve la foto entera cuando la caja no la toca --una caja medida en
+    un cuadro de otro tamano--. Callado, eso se archiva como si fuera un diente. Con las
+    cajas de _componentes no pasa: sobre las 36 fotos reales por 9 inclinaciones no se
+    disparo nunca."""
+    imagen = np.zeros((100, 100, 3), np.uint8)
+
+    recorte = D.Diente(caja=(200, 200, 300, 300), area=0.0).recortar(imagen)
+
+    assert recorte.shape == imagen.shape
+    assert "fuera de la imagen" in caplog.text
+
+
+def test_sin_ningun_recuadro_tambien_se_prueba_el_segundo_camino() -> None:
+    """_no_separo dice True en DOS casos opuestos: el umbral junto todo en un recuadro
+    del tamano de la foto, o no dejo nada. Los dos tienen que mandar al 2do camino."""
+    entera = [D.Diente(caja=(0, 0, 640, 480), area=1.0, entero=True)]
+
+    assert D._no_separo(entera, 640 * 480) is True
+    assert D._no_separo([], 640 * 480) is True

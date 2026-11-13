@@ -54,22 +54,56 @@ dos separa mejor un filo sano de uno gastado.
 LO QUE NO HACE: CORREGIR ROTACION
 ---------------------------------
 Si la pieza se apoya girada, el parecido baja aunque sea el mismo diente. Buscar tambien el
-angulo multiplicaria el costo por la cantidad de angulos probados. Esta medido sobre las 19
-fotos del taller, volviendo a juzgar cada una despues de perturbarla como pasa de verdad al
-reapoyar la pieza (el veredicto se mantiene en):
+angulo multiplicaria el costo por la cantidad de angulos probados.
 
-    quieta (control)      19 de 19      mas luz (+25%)        19 de 19
-    corrida 10 px         19 de 19      menos luz (-25%)      19 de 19
-    corrida 25 px         19 de 19      girada 3 grados       17 de 19
-    corrida 50 px         19 de 19      girada 7 grados       16 de 19
-                                        girada 15 grados      10 de 19
+MEDIDO DE NUEVO sobre las 14 fotos del microscopio de hoy (13/11/2026), perturbando cada
+una como pasa de verdad al reapoyar la pieza y mirando si el parecido se mantiene por
+encima del 70% que usa la pantalla:
 
-    reapoyada de verdad (14 px + 4 grados + 12% de luz):      17 de 19
+    quieta (control)      14 de 14  (1.000)   mas luz (+25%)     14 de 14  (0.975)
+    corrida 10 px         14 de 14  (1.000)   menos luz (-25%)   14 de 14  (1.000)
+    corrida 25 px         14 de 14  (1.000)   girada 3 grados    13 de 14  (0.840)
+    corrida 50 px         14 de 14  (1.000)   girada 7 grados     8 de 14  (0.711)
+                                              girada 15 grados    1 de 14  (0.538)
 
-O sea: correrla y la luz NO mueven el veredicto; girarla SI. La recomendacion practica para
-el taller --apoyar la pieza siempre con la misma orientacion-- sale de aca, y no de una
+    reapoyada de verdad (14 px + 4 grados + 12% de luz):   13 de 14  (0.801)
+
+Correrla y la luz NO mueven el parecido: con el microscopio de hoy aguanta 50 px de
+corrimiento sin moverse un punto, porque matchTemplate busca el mejor calce. GIRARLA si, y
+mas fuerte de lo que decia la tabla anterior --medida sobre 19 fotos de la camara que ya no
+esta-- que daba 10 de 19 a 15 grados: hoy es 1 de 14. La recomendacion practica para el
+taller --apoyar la pieza siempre con la misma orientacion-- sale de aca, y no de una
 suposicion. Si algun dia hace falta, el lugar donde agregar busqueda de angulo es
 alineado(), y tests/test_estabilidad.py es la prueba que tendria que cambiar.
+
+LO QUE SI HACE, Y HAY QUE SABERLO: APRENDE EL ENCUADRE
+-------------------------------------------------------
+Esta memoria separa por COMO SE VE la foto entera, y el encuadre es parte de como se ve.
+Si dos conceptos se sacan con encuadres distintos, va a separarlos perfecto sin haber
+mirado el filo ni una vez.
+
+Esto no es una sospecha: esta medido sobre las 14 fotos que el taller saco el 12/11/2026,
+que estan TODAS archivadas en 'afilado' --para el operario son todas la misma cosa-- pero
+10 salieron del cuadro casi entero (640x420 a 640x446) y 4 son recortes chicos de un
+diente (138x262, 253x257, 297x239, 297x315). Etiquetandolas a proposito por encuadre y
+dejando una afuera por vez:
+
+    acierto                        14 de 14
+    confianza de cada una          100%
+
+Catorce de catorce, todas al tope, sobre piezas que el operario llamo iguales. Y el mismo
+efecto se ve en el porcentaje de la pantalla: dejando una afuera contra las otras trece,
+las 10 anchas dan 81.6%-92.1% (mediana 88.7%, pasan el 70% las 10) y los 4 recortes dan
+39.0%-68.6% (mediana 58.9%, no pasa ninguno). La foto mas parecida fue SIEMPRE del mismo
+encuadre, 14 de 14.
+
+CONSECUENCIA PRACTICA, para el que junta las fotos: todos los conceptos se sacan con el
+MISMO encuadre. Si 'afilado' se saca de lejos y 'mal_afilado' de cerca, el programa va a
+decir mal_afilado al 100% y va a estar leyendo el encuadre, no el filo; el informe de un
+reclamo diria que un diente esta mal por como se apoyo la camara. La otra mitad del mismo
+problema esta en run_live.py: lo que se archiva es el recorte del diente ELEGIDO, y cuando
+el detector no logra separar ninguno, ese "recorte" es el cuadro entero. De ahi salen las
+dos clases de foto que hay hoy en la coleccion.
 
 LA MEMORIA SE MIDE A SI MISMA
 -----------------------------

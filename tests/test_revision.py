@@ -871,3 +871,95 @@ def test_con_dos_dientes_los_recuadros_se_dibujan_aunque_sean_grandes(cfg: AppCo
 
     for color in (revision._VERDE_OK, revision._ROJO_NO):
         assert _pintado_en_la_foto(pantalla, color) > 500
+
+
+def test_el_cartel_de_un_diente_no_contradice_a_su_recuadro() -> None:
+    """Paso con las fotos del taller: un diente cuya foto archivada mas parecida era
+    'mal_afilado' al 84% salia con el recuadro ROJO y el cartel diciendo APROBADO 84%.
+
+    El cartel recalculaba el veredicto a partir del porcentaje suelto --84% pasa el 70%--
+    sin mirar EN QUE concepto habia caido, que es justo lo que hace el recuadro."""
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    diente = revision.DienteEnPantalla(
+        caja=(10, 10, 100, 100), parecido=0.84, aprobado=False, concepto="mal_afilado",
+    )
+    estado = revision.EstadoRevision(congelado=True, parecido=0.84, dientes=[diente])
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "DESAPROBADO" and aprobado is False
+    assert color == revision._color_de(diente)
+    assert "mal_afilado" in detalle and "84%" in detalle
+
+
+def test_con_un_diente_bueno_el_cartel_lo_aprueba_igual() -> None:
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    diente = revision.DienteEnPantalla(
+        caja=(10, 10, 100, 100), parecido=0.91, aprobado=True, concepto="afilado",
+    )
+    estado = revision.EstadoRevision(congelado=True, parecido=0.91, dientes=[diente])
+
+    titulo, _detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO" and aprobado is True
+    assert color == revision._color_de(diente)
+
+
+def test_un_diente_sin_veredicto_deja_hablar_al_cartel_de_siempre() -> None:
+    """Si el diente no opina, el cartel tiene que seguir diciendo lo que decia antes:
+    cuanto falta para que la memoria pueda juzgar, o el parecido sin disfrazarlo."""
+    cfg = AppConfig(clases=["afilado"], clases_defecto=[])
+    cfg.interfaz.veredicto_por_parecido = False
+    diente = revision.DienteEnPantalla(caja=(10, 10, 100, 100), parecido=0.55)
+    estado = revision.EstadoRevision(congelado=True, parecido=0.55, dientes=[diente])
+
+    titulo, detalle, _color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo.startswith("PARECIDO") and aprobado is None
+    assert "todavia no es un veredicto" in detalle
+
+
+def test_el_cartel_dice_cual_foto_de_modelo_dio_el_numero() -> None:
+    """El porcentaje es el MEJOR de toda la galeria, y la cabecera nombra la que eligio el
+    operario con 'm'. Medido sobre una foto del taller contra los tres modelos reales: el
+    maximo (80%) salia de modelo_20261112_161523 y contra la foto nombrada arriba daba
+    62%, o sea el veredicto al reves. El cartel tiene que nombrar la que dio el numero."""
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    estado = revision.EstadoRevision(congelado=True)
+    estado.dientes = [
+        revision.DienteEnPantalla(
+            caja=(10, 10, 100, 100), parecido=0.7969, aprobado=True,
+            modelo="modelo_20261112_161523.jpg",
+        )
+    ]
+
+    titulo, detalle, _color, _ok = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "APROBADO"
+    assert "80%" in detalle
+    assert "modelo_20261112_161523.jpg" in detalle
+
+
+def test_cuando_no_encuentra_el_diente_la_pantalla_lo_dice() -> None:
+    """El operario no tenia como distinguir los dos casos, y el numero significa otra cosa
+    en cada uno. Medido sobre las 14 fotos del taller comparando cada una contra las otras
+    trece: las 10 que salieron del cuadro entero dan 81.6%-92.1% y los 4 recortes de
+    diente 39.0%-68.6%, siendo todas la misma pieza para el. Lo que separa esos dos grupos
+    es el encuadre, no el filo."""
+    cfg = AppConfig(clases=["afilado"], clases_defecto=[])
+    entero = revision.DienteEnPantalla(
+        caja=(0, 0, 640, 480), parecido=0.88, aprobado=True, entero=True,
+    )
+    estado = revision.EstadoRevision(congelado=True, parecido=0.88, dientes=[entero])
+
+    assert "NO ENCUENTRO EL DIENTE" in (revision.detalle_extra(estado, cfg) or "")
+
+
+def test_con_el_diente_encontrado_no_aparece_ese_aviso() -> None:
+    cfg = AppConfig(clases=["afilado"], clases_defecto=[])
+    diente = revision.DienteEnPantalla(
+        caja=(100, 80, 300, 360), parecido=0.88, aprobado=True,
+    )
+    estado = revision.EstadoRevision(congelado=True, parecido=0.88, dientes=[diente])
+
+    assert "NO ENCUENTRO EL DIENTE" not in (revision.detalle_extra(estado, cfg) or "")

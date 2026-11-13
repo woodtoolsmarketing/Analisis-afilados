@@ -81,6 +81,18 @@ class GaleriaReferencias:
         return Path(self._nombres[self._indice]).stem
 
     @property
+    def archivo_actual(self) -> Optional[str]:
+        """Nombre del archivo elegido, CON extension. None si la galeria esta vacia.
+
+        Hace falta aparte de nombre_actual, que viene sin extension: una carpeta puede
+        tener modelo.jpg y modelo.png, y quien use el nombre como clave de una cache les
+        da el mismo recorte a las dos.
+        """
+        if not self._nombres:
+            return None
+        return self._nombres[self._indice]
+
+    @property
     def posicion(self) -> tuple[int, int]:
         """(cual, cuantas), empezando en 1. (0, 0) si no hay ninguna."""
         if not self._nombres:

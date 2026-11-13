@@ -66,7 +66,14 @@ CAMPOS_ORDEN: tuple[tuple[str, str], ...] = (
     ("Nota de pedido", "texto"),
     ("Cliente", "texto"),
     ("Cuantas sierras", "numero"),
-    ("Dientes por sierra", "numero"),
+    # "el mismo para todas" no es un detalle de redaccion: es lo unico que hay. Orden.nueva
+    # pone este numero en TODAS las sierras de la orden, asi que una orden con sierras de
+    # 24 y de 36 no se puede cargar y hay que partirla en dos ordenes.
+    # MAS LARGO NO ENTRA: la etiqueta se dibuja en x = _MARGEN + 22 y el valor en
+    # x = _MARGEN + 330, o sea 308 px de lugar. Medido con tipografia.medir(texto, 20):
+    # "Dientes por sierra" 153 px, con "(el mismo)" 249 px, y con "(el mismo para todas)"
+    # 347 px, que se dibuja ENCIMA del numero que teclea el operario.
+    ("Dientes por sierra (el mismo)", "numero"),
 )
 
 _MARGEN = 18
@@ -102,6 +109,9 @@ class EstadoPanel:
     cargando_orden: bool = False
     valores: list[str] = field(default_factory=lambda: ["" for _ in CAMPOS_ORDEN])
     campo: int = 0
+    # El formulario que ya se ofrecio retomar, para que el segundo ENTER confirme y
+    # cualquier cambio en los datos vuelva a preguntar.
+    retomar: str = ""
 
     @property
     def concepto_elegido(self) -> Optional[Concepto]:

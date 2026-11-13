@@ -68,6 +68,16 @@ class DienteEnPantalla:
     ejemplo: Optional[np.ndarray] = None   # una foto guardada de ese mismo estado
     elegido: bool = False                  # el que se archiva si se aprieta GUARDAR
     juicio: Optional[Juicio] = None        # lo que dijo la memoria de ESTE diente
+    # La foto de modelo que GANO la comparacion, cuando el parecido salio de la galeria
+    # entera. No es la que la cabecera nombra: esa es la que eligio el operario con 'm'.
+    modelo: Optional[str] = None
+    # True cuando el detector NO encontro ningun diente y lo que se esta mirando es el
+    # cuadro entero. Hay que decirlo: el numero significa otra cosa en cada caso. Medido
+    # sobre las 14 fotos del taller, comparando cada una contra las otras trece, las 10
+    # que salieron del cuadro entero dan 81.6%-92.1% y los 4 recortes de diente dan
+    # 39.0%-68.6%, siendo todas la misma pieza para el operario: lo que separa esos dos
+    # grupos no es el filo, es el encuadre.
+    entero: bool = False
 
 
 @dataclass
@@ -708,6 +718,16 @@ def estado_resultado(
     # APROBADO enorme sobre una foto con un diente bueno y uno roto seria mentira.
     if len(estado.dientes) > 1:
         return _resultado_de_varios(estado)
+    # CON UN SOLO DIENTE, EL CARTEL ES EL DEL RECUADRO. No se vuelve a decidir aca: el
+    # cartel toma el veredicto que ya tiene ese diente. Mientras lo recalculaba a partir
+    # del porcentaje suelto, los dos podian decir cosas opuestas sobre la misma pieza,
+    # porque el recuadro ademas mira EN QUE concepto cayo. Medido con las fotos del taller:
+    # un diente cuya foto archivada mas parecida era 'mal_afilado' al 84% salia con el
+    # recuadro ROJO y el cartel diciendo APROBADO 84%, los dos al mismo tiempo.
+    if len(estado.dientes) == 1:
+        cartel = _resultado_de_un_diente(estado.dientes[0], cfg)
+        if cartel is not None:
+            return cartel
 
     valor = coincidencia(estado.veredicto, cfg)
     origen = "segun el modelo entrenado"
@@ -739,6 +759,52 @@ def estado_resultado(
         return "SIN MODELO", _progreso_del_dataset(estado, cfg), _AMBAR, None
     detalle = f"{valor * 100:.0f}% - {origen}"
     if valor >= umbral:
+        return "APROBADO", detalle, _VERDE_OK, True
+    return "DESAPROBADO", detalle, _ROJO_NO, False
+
+
+def _resultado_de_un_diente(
+    diente: "DienteEnPantalla", cfg: AppConfig
+) -> Optional[tuple[str, str, tuple, Optional[bool]]]:
+    """El cartel de un solo diente, sacado del MISMO veredicto que pinta su recuadro.
+
+    Devuelve None cuando ese diente no opina nada: ahi sigue el camino de siempre, que es
+    el que sabe decir "SIN MODELO", "PARECIDO x%" o cuanto falta para que la memoria pueda
+    juzgar.
+    """
+    if diente.juicio is not None:
+        return _resultado_de_memoria(diente.juicio, cfg)
+    if diente.aprobado is None:
+        # SIN VEREDICTO TAMBIEN HAY QUE DECIR DE DONDE SALIO EL NUMERO. Con
+        # veredicto_por_parecido en false este diente no trae aprobado, y el camino de
+        # abajo mostraba "PARECIDO xx% - con la foto de modelo" aunque ese xx% lo hubiera
+        # medido la memoria contra las fotos ARCHIVADAS: la pantalla nombraba una foto que
+        # nadie miro. Medido con el taller de hoy --14 fotos en 'afilado'-- y la llave en
+        # false: 70%, 87% y 89% salidos de memoria.mejor_parecido(), los tres rotulados
+        # "con la foto de modelo".
+        if diente.concepto and diente.parecido is not None:
+            return (
+                f"PARECIDO {diente.parecido * 100:.0f}%",
+                f"con {diente.concepto}, la foto archivada mas parecida - todavia no es "
+                "un veredicto de afilado",
+                _AMBAR,
+                None,
+            )
+        return None
+    porcentaje = "" if diente.parecido is None else f"{diente.parecido * 100:.0f}% - "
+    if diente.concepto:
+        detalle = f"{porcentaje}se parece a {diente.concepto}, la foto archivada mas parecida"
+    elif diente.modelo:
+        # CUAL de las fotos de modelo dio ese numero. El porcentaje es el MEJOR de toda la
+        # galeria y la cabecera nombra la que eligio el operario con 'm': medido sobre una
+        # foto del taller contra los tres modelos reales, el maximo (80%) salia de
+        # modelo_20261112_161523 y contra la nombrada arriba daba 62%, con el veredicto al
+        # reves. Decir "las fotos de modelo" no alcanzaba: el operario no tenia como saber
+        # contra cual se midio, y apretando 'm' el numero no se movia.
+        detalle = f"{porcentaje}la que mas se parece de las fotos de modelo: {diente.modelo}"
+    else:
+        detalle = f"{porcentaje}comparando con las fotos de modelo"
+    if diente.aprobado:
         return "APROBADO", detalle, _VERDE_OK, True
     return "DESAPROBADO", detalle, _ROJO_NO, False
 
@@ -808,6 +874,16 @@ def detalle_extra(estado: EstadoRevision, cfg: AppConfig) -> Optional[str]:
             "elegis cual"
         )
 
+    # NO ENCONTRE EL DIENTE: lo que se mira --y lo que se archiva-- es el cuadro entero.
+    # Hay que decirlo porque el numero significa otra cosa en cada caso, y el operario no
+    # tenia como distinguirlos. Medido sobre las 14 fotos del taller, comparando cada una
+    # contra las otras trece: las 10 que salieron del cuadro entero dan 81.6% a 92.1% y
+    # los 4 recortes de diente dan 39.0% a 68.6%, siendo todas la misma pieza para el. Lo
+    # que separa esos dos grupos no es el filo: es el encuadre. Y si media coleccion se
+    # junta de un modo y media del otro, el programa aprende eso.
+    if len(estado.dientes) == 1 and estado.dientes[0].entero:
+        return "NO ENCUENTRO EL DIENTE: el numero es del cuadro entero - acerque la pieza"
+
     juicio = estado.juicio
     if juicio is None or not juicio.decidio:
         return None
@@ -875,12 +951,22 @@ def _boton_lindo(
     return (x, y1, x2, y2)
 
 
-# Desde que parte del cuadro un recuadro deja de senalar algo. Medido sobre las fotos de
-# microscopio: cuando el recuadro cae BIEN sobre un diente en primer plano ocupa entre el
-# 44% y el 100% del cuadro --un diente de cerca es casi toda la foto-- y cuando el programa
-# no logra separar nada y devuelve la foto entera, ocupa 72% o mas. No se pueden separar
-# por el tamano, asi que lo que se decide aca es solo si DIBUJARLO: con un solo diente y un
-# recuadro asi de grande, no agrega nada y tapa la pieza.
+# Desde que parte del cuadro un recuadro deja de senalar algo. El 44%-100% que decia aca
+# era de la camara anterior, que miraba el diente mucho mas de cerca. Medido de nuevo sobre
+# las 14 fotos del microscopio de hoy a 640x480, sobre las CAJAS que devuelve
+# dientes.detectar() --no sobre la mascara, que es de lo que habla dientes.AREA_MINIMA y
+# es mucho mas chica--: 13 de las 14 dan UN solo recuadro, y ese recuadro ocupa
+#
+#     0.075  0.084  0.096  0.112  0.113  0.126  0.148  0.366  0.399  0.494  0.637
+#     0.871  0.871          (mediana 0.148)
+#
+# o sea que con el encuadre de hoy el recuadro de un diente bien puesto es CHICO: 9 de 13
+# por debajo del 44% y 10 de 13 por debajo de este corte, asi que en 10 de 13 fotos se
+# dibuja. Las tres grandes --0.64, 0.87 y 0.87-- son recuadros que se comieron el cuadro,
+# no dientes de cerca. La foto que queda da DOS cajas, de 0.069 y 0.085. Y cuando el corte
+# por brillo no separa NADA, la caja es la foto entera, el 100%, no "72% o mas". Por el
+# tamano no se puede saber si esta bien puesto: lo que se decide aca es solo si DIBUJARLO,
+# porque un recuadro del tamano del panel no senala nada y tapa la pieza.
 _AREA_PARA_DIBUJAR = 0.60
 
 
@@ -927,8 +1013,15 @@ def _marcar_dientes(
 ) -> list[tuple[str, tuple[int, int], tuple, int, bool]]:
     """Dibuja un recuadro sobre cada diente. Devuelve los textos para la pasada de texto.
 
-    Con un solo diente encontrado en toda la foto --el caso normal-- no se dibuja nada: el
-    recuadro seria el borde del panel y no agrega informacion.
+    Con un solo diente encontrado se dibuja igual, salvo que la caja sea casi todo el cuadro
+    (_AREA_PARA_DIBUJAR): ahi el recuadro seria el borde del panel y no agrega informacion.
+    Medido sobre las 14 fotos de hoy, el unico recuadro ocupa de 0.075 a 0.871 del cuadro
+    --mediana 0.148-- asi que se dibuja en 10 de 13. Antes aca decia que con un solo diente
+    no se dibujaba nada, y eso era con el encuadre de la camara anterior.
+
+    OJO con el porcentaje que va encima: con UN solo diente es el parecido medido sobre el
+    CUADRO ENTERO --asi lo calcula _analizar_dientes, y por eso el cartel y el recuadro
+    dicen lo mismo-- y no el de los pixeles que el recuadro encierra.
     """
     textos: list[tuple[str, tuple[int, int], tuple, int, bool]] = []
     if not estado.dientes or vivo is None:

@@ -146,6 +146,13 @@ class InterfazConfig:
     # Cada cuanto se mira una foto. Con 0.2 y cinco confirmaciones, el operario apoya el
     # diente UN SEGUNDO y queda anotado.
     #
+    # UN SEGUNDO ES EL MINIMO, no la unica condicion: la racha solo cierra si en ese
+    # segundo la pieza se movio menos que automatico.DISTANCIA_MISMA_FOTO, que estan
+    # medidos unos 4 px sobre las fotos del taller. Medido en el bucle apoyando seis
+    # dientes: con un temblor de mano de hasta 2 px los anota a los seis, con 4 px no anota
+    # ninguno. Sirve con la sierra apoyada o sostenida con pulso firme; no sirve pasando la
+    # sierra de largo sin detenerse en cada diente.
+    #
     # Arranco en 1.0 y era inusable: cinco fotos a una por segundo son CINCO SEGUNDOS de
     # sierra quieta por diente, sostenida con la mano, sin que el porcentaje cruce el
     # umbral ni una vez. En una sierra de 80 dientes son casi siete minutos de inmovilidad.

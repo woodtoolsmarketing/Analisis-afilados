@@ -398,7 +398,9 @@ def test_con_un_diente_todo_sigue_como_antes(taller: Path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _correr_automatico(taller: Path, monkeypatch, camara, teclas, dientes: int = 6):
+def _correr_automatico(
+    taller: Path, monkeypatch, camara, teclas, dientes: int = 6, nitidez: float = 1.0
+):
     """Arranca una orden, pone esa camara y deja correr el bucle."""
     from afilado.ordenes import Orden, Ordenes
 
@@ -418,7 +420,7 @@ def _correr_automatico(taller: Path, monkeypatch, camara, teclas, dientes: int =
     cfg = config_mod.AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
     cfg.interfaz.modo = "simple"
     cfg.interfaz.evaluar_en_vivo = True
-    cfg.interfaz.nitidez_minima = 1.0
+    cfg.interfaz.nitidez_minima = nitidez
     cfg.interfaz.segundos_entre_fotos = 0.05      # para no esperar cinco segundos reales
     cfg.detector.tarea = "classify"
     cfg.memoria.minimo_por_concepto = 1
@@ -489,12 +491,29 @@ def test_el_cartel_y_el_recuadro_dicen_lo_mismo(taller: Path, monkeypatch) -> No
     assert del_cartel == pytest.approx(de_los_dientes[0])
 
 
+class _OtroDiente(_CamaraFalsa):
+    """La sierra avanza un diente DE VERDAD entre una tecla y la otra.
+
+    _CamaraFalsa cambia la foto en cada lectura, pero MEDIDO con la firma de
+    automatico.huella(), dos cuadros seguidos de _diente(n%7) distan 0.0207-0.0250: menos
+    que los 0.04 de "es la misma foto", asi que para el programa siguen siendo el mismo
+    diente. Dos dientes consecutivos de verdad del taller distan 0.1048 como minimo, y
+    _diente(0) contra _diente(6) da 0.1231, que es lo que hace falta para que el freno de
+    la 'g' los deje pasar como dos dientes.
+    """
+
+    def leer(self):
+        self.leidos += 1
+        return _diente(0) if self.leidos < 2 else _diente(6)
+
+
 def test_la_tecla_g_anota_el_diente_sin_archivar_la_foto(taller: Path, monkeypatch) -> None:
     """Son dos cosas distintas: archivar le ensena al programa y mete la foto en el
     dataset; anotar dice 'este diente ya lo mire' y llena el informe."""
     from afilado.ordenes import Orden, Ordenes
 
     Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+    monkeypatch.setattr(run_live, "Camara", _OtroDiente)
 
     _correr([ord("g"), ord("g"), ord("q")], monkeypatch)
 
@@ -527,3 +546,426 @@ def test_el_boton_de_anotar_aparece_con_la_orden_abierta() -> None:
 
     assert "anotar" not in sin_orden.botones
     assert "anotar" in con_orden.botones
+
+
+# ---------------------------------------------------------------------------
+# LO QUE PASA DELANTE DEL MICROSCOPIO MIENTRAS LA SIERRA ESTA QUIETA.
+# test_una_sierra_quieta_no_llena_el_informe_sola usa una pieza quieta en una
+# escena donde no pasa nada, y en ese mundo el freno nunca se ponia a prueba.
+# En el taller cruza una mano, parpadea el tubo fluorescente y el operario tapa
+# el microscopio con la palma para acomodar la pieza. Cada una de esas tres
+# cosas alcanzaba para que la MISMA pieza quieta se anotara de nuevo.
+# ---------------------------------------------------------------------------
+
+
+class _QuietaConMano(_Quieta):
+    """La pieza quieta, y cada tanto una mano cruzando por delante.
+
+    MEDIDO: con el freno de antes, esto dejaba anotados los SEIS dientes de la sierra en
+    esta misma prueba, todos con el mismo parecido.
+    """
+
+    def leer(self):
+        imagen = super().leer()
+        if self.leidos % 17 == 0:
+            imagen[:, 40:160] = 20
+        return imagen
+
+
+class _QuietaConParpadeo(_Quieta):
+    """El tubo fluorescente del taller, que no es continuo.
+
+    MEDIDO: este caso ya pasaba antes del arreglo. La huella se toma normalizada, asi que
+    un cambio de exposicion no la mueve. Queda como guardia de esa propiedad.
+    """
+
+    def leer(self):
+        imagen = super().leer()
+        if self.leidos % 13 == 0:
+            imagen = np.clip(imagen.astype(np.float32) * 0.55, 0, 255).astype(np.uint8)
+        return imagen
+
+
+class _QuietaYTapada(_Quieta):
+    """La pieza quieta, y a partir del cuadro 120 el microscopio tapado con la mano."""
+
+    def leer(self):
+        imagen = super().leer()
+        if self.leidos > 120:
+            return cv2.GaussianBlur(np.full_like(imagen, 28), (31, 31), 0)
+        return imagen
+
+
+@pytest.mark.parametrize("camara", [_QuietaConMano, _QuietaConParpadeo])
+def test_lo_que_cruza_por_delante_no_llena_el_informe(taller: Path, monkeypatch, camara) -> None:
+    orden = _correr_automatico(taller, monkeypatch, camara, [255] * 400 + [ord("q")])
+
+    assert orden.total_revisados == 1, "la misma pieza quieta se anoto varias veces"
+
+
+def test_con_el_microscopio_tapado_no_se_anota_nada(taller: Path, monkeypatch) -> None:
+    """Sin esto, el analisis se saltea por falta de foco pero el veredicto de antes queda
+    pegado en pantalla, y la captura automatica lo anotaba como si fuera de ahora: el
+    informe terminaba con el parecido de la foto de antes de tapar el microscopio."""
+    orden = _correr_automatico(
+        taller, monkeypatch, _QuietaYTapada, [255] * 400 + [ord("q")], nitidez=5.0
+    )
+
+    assert orden.sierras[0].revisados[0].origen.endswith("anotado solo")
+    assert orden.total_revisados == 1
+
+
+@pytest.mark.parametrize("tecla", [ord("a"), ord("g")])
+def test_anotar_a_mano_no_deja_el_diente_contado_dos_veces(
+    taller: Path, monkeypatch, tecla
+) -> None:
+    """'a' archiva y anota, 'g' solo anota. En los dos casos ese diente ya esta contado, y
+    la captura automatica tiene que enterarse: con la pieza quieta, una sola pulsacion
+    dejaba DOS renglones para el mismo diente --el del operario y el del programa un
+    segundo despues-- y el informe decia que se habian revisado dos."""
+    orden = _correr_automatico(taller, monkeypatch, _Quieta, [tecla] + [255] * 400 + [ord("q")])
+
+    assert orden.total_revisados == 1
+    assert "el operario" in orden.sierras[0].revisados[0].origen
+
+
+def test_con_la_imagen_congelada_la_g_no_gasta_un_diente_por_pulsacion(
+    taller: Path, monkeypatch
+) -> None:
+    """REPRODUCIDO: congelada UNA foto y diez 'g', el informe decia diez dientes revisados
+    --los diez con el mismo parecido y el mismo instante-- y la foto era una. OpenCV
+    repite el evento si se deja la tecla apretada, asi que no hace falta ni quererlo."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 24))
+
+    _correr([_ESPACIO] + [ord("g")] * 10 + [ord("q")], monkeypatch)
+
+    assert _ordenes(taller).abierta.total_revisados == 1
+
+
+def test_con_mas_de_24_modelos_las_fotos_no_se_releen_en_cada_analisis(
+    taller: Path, monkeypatch
+) -> None:
+    """La cache comparaba sus 24 nombres contra TODOS los de la carpeta, asi que arriba de
+    24 nunca validaba y las 24 fotos volvian del disco en cada analisis. Medido con 60
+    cuadros de 640x480 y clasificar_cada_n_frames=5: 289 cv2.imread y 21.6 ms por cuadro
+    con 25 fotos, contra 25 imread y 13.5 ms."""
+    carpeta = taller / "data" / "referencia" / "microscopio"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    for i in range(25):
+        assert cv2.imwrite(str(carpeta / f"mod{i:02d}.jpg"), _diente(i % 7))
+
+    leida_de_verdad = cv2.imread
+    leidas: list = []
+
+    def contar(ruta, *resto):
+        leidas.append(str(ruta))
+        return leida_de_verdad(ruta, *resto)
+
+    monkeypatch.setattr(cv2, "imread", contar)
+
+    _correr([255] * 30 + [ord("q")], monkeypatch)
+
+    de_modelo = [r for r in leidas if "microscopio" in r]
+    assert len(de_modelo) <= 26, (
+        f"las fotos de modelo se releyeron en cada analisis: {len(de_modelo)} lecturas"
+    )
+
+
+def test_congelado_cambiar_de_modelo_mueve_el_porcentaje(taller: Path, monkeypatch) -> None:
+    """Congelado, la 'm' cambiaba la foto y el nombre de la cabecera pero no el numero: la
+    pantalla mostraba dos cosas que no eran de la misma pieza. Medido con dos dientes a la
+    vista y tres modelos, los parecidos quedaban clavados en (0.6823, 0.6173) mientras la
+    cabecera iba de mod0 a mod2."""
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+    carpeta = taller / "data" / "referencia" / "microscopio"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        assert cv2.imwrite(str(carpeta / f"mod{i}.jpg"), _diente(i * 3))
+
+    vistos: list = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.congelado and estado.dientes:
+            vistos.append(tuple(d.parecido for d in estado.dientes))
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+
+    _correr([_ESPACIO, 255, ord("m"), 255, ord("m"), 255, ord("q")], monkeypatch)
+
+    assert len(vistos) > 2, "no se llego a dibujar la pantalla congelada"
+    assert len(set(vistos)) > 1, "se cambio de modelo y el porcentaje no se movio"
+
+
+def test_el_recorte_que_se_archiva_sale_del_cuadro_que_se_midio(
+    taller: Path, monkeypatch
+) -> None:
+    """El recuadro se mide uno de cada cada_n_frames cuadros, y recortarlo de la foto de
+    AHORA lo deja corrido lo que se movio la mano. Reproducido con la pieza corriendo
+    12 px por cuadro: el recuadro era (87,158,302,342) y la pieza ya estaba en
+    (135,158,350,342), 48 px a la derecha."""
+    pieza = _diente(0, 240)
+    entregados: list = []
+
+    def cuadro(n: int):
+        fondo = np.full((480, 640, 3), 12, np.uint8)
+        x = 20 + (n * 12) % 340
+        fondo[120:360, x:x + 240] = pieza
+        return fondo
+
+    class _Movil(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            foto = cuadro(self.leidos)
+            entregados.append(foto)
+            return foto
+
+    monkeypatch.setattr(run_live, "Camara", _Movil)
+    carpeta = taller / "data" / "referencia" / "microscopio"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(carpeta / "mod0.jpg"), pieza)
+
+    cajas: list = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        cajas.append((len(entregados), [d.caja for d in estado.dientes if d.elegido]))
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+
+    # El config del TALLER: se analiza uno de cada cinco cuadros. La 'a' cae en el cuadro
+    # 9, cuatro cuadros despues del ultimo analisis, que fue el del cuadro 5.
+    pendientes = [255] * 8 + [ord("a")] + [ord("q")]
+    monkeypatch.setattr(
+        cv2, "waitKey", lambda *_a: pendientes.pop(0) if pendientes else _ESC
+    )
+    cfg = config_mod.AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+    cfg.interfaz.modo = "simple"
+    cfg.interfaz.evaluar_en_vivo = True
+    cfg.interfaz.nitidez_minima = 1.0
+    cfg.detector.tarea = "classify"
+    cfg.detector.clasificar_cada_n_frames = 5
+    cfg.memoria.minimo_por_concepto = 1
+    run_live._ejecutar_revision(cfg, argparse.Namespace(grabar=None))
+
+    archivadas = _fotos(taller, "aprobada")
+    assert len(archivadas) == 1
+    guardada = cv2.imread(str(archivadas[0]))
+    caja = next(c for n, c in cajas if n == 9 and c)[0]
+    del_analisis = run_live.dientes.Diente(caja=caja, area=0.0).recortar(entregados[4])
+    del_momento = run_live.dientes.Diente(caja=caja, area=0.0).recortar(entregados[8])
+    dif_analisis = float(np.abs(guardada.astype(int) - del_analisis.astype(int)).mean())
+    dif_momento = float(np.abs(guardada.astype(int) - del_momento.astype(int)).mean())
+    assert dif_analisis < dif_momento, (
+        "lo archivado salio del cuadro de la tecla y el recuadro del cuadro anterior"
+    )
+
+
+class _CamaraCongelada(_CamaraFalsa):
+    """El microscopio desenchufado: DroidCam deja un cartel fijo y la camara lo sabe.
+
+    El control de foco NO lo atrapa --el cartel es texto blanco nitido sobre negro-- asi
+    que hay que preguntarle a la camara, que es lo que ya hace motivo_para_no_archivar.
+    """
+
+    congelada = True
+
+    def leer(self):
+        self.leidos += 1
+        imagen = np.zeros((480, 640, 3), np.uint8)
+        cv2.putText(imagen, "Start DroidCam", (40, 240), cv2.FONT_HERSHEY_SIMPLEX, 1.6,
+                    (255, 255, 255), 3, cv2.LINE_AA)
+        return imagen
+
+
+def test_con_la_camara_congelada_la_captura_automatica_no_anota(
+    taller: Path, monkeypatch
+) -> None:
+    """REPRODUCIDO con el taller de hoy: con el microscopio desenchufado la captura
+    automatica anotaba un diente de la orden del cliente --'afilado', 32%, RECHAZADO-- que
+    era el cartel de DroidCam. El camino de a mano ya lo frenaba ('CAMARA CONGELADA -
+    conecte el microscopio'); este preguntaba por la imagen y no por la camara."""
+    orden = _correr_automatico(
+        taller, monkeypatch, _CamaraCongelada, [255] * 400 + [ord("q")]
+    )
+
+    assert orden.total_revisados == 0
+
+
+def test_la_foto_de_modelo_se_recorta_con_la_misma_regla_que_la_de_la_camara(
+    taller: Path, monkeypatch
+) -> None:
+    """Con maximo=1 el recuadro que queda es el de MASCARA mas grande, y en las fotos del
+    taller esa es la del hueco: medido sobre afilado_20261112_161626_660, maximo=1
+    devuelve (84,300,261,447) --el hueco-- y la pantalla elige (237,63,323,308) --la cara
+    de widia, rayado 43.6 contra 30.4--. Si la foto de modelo se recorta por el hueco,
+    todo lo que se compare contra ella se mide contra un hueco."""
+    pedidos: list[int] = []
+    original = run_live.dientes.detectar
+
+    def espiar(frame, maximo=4):
+        pedidos.append(maximo)
+        return original(frame, maximo)
+
+    monkeypatch.setattr(run_live.dientes, "detectar", espiar)
+    modelo = taller / "data" / "referencia" / "microscopio" / "modelo.jpg"
+    modelo.parent.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(modelo), _diente(0))
+
+    _correr([_ESPACIO] + [255] * 3 + [ord("q")], monkeypatch)
+
+    assert pedidos, "no se llamo al detector ni una vez"
+    assert 1 not in pedidos, (
+        "la foto de modelo se recorta con maximo=1 y la de la camara con maximo=4: "
+        "dos reglas distintas para la misma pieza"
+    )
+
+
+def test_dos_modelos_con_el_mismo_nombre_no_comparten_el_recorte(
+    taller: Path, monkeypatch
+) -> None:
+    """galeria.nombre_actual viene SIN extension, asi que modelo.jpg y modelo.png
+    compartian el recorte de la cache. Medido con dos dientes a la vista: la 'm' dejaba
+    los parecidos clavados en (0.6823, 0.6173) y la cabecera decia "modelo" las dos
+    veces, asi que el operario no tenia como notarlo."""
+    class _Dos(_CamaraFalsa):
+        def leer(self):
+            self.leidos += 1
+            return _dos_dientes()
+
+    monkeypatch.setattr(run_live, "Camara", _Dos)
+    carpeta = taller / "data" / "referencia" / "microscopio"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(carpeta / "modelo.jpg"), _diente(0, 240))
+    assert cv2.imwrite(str(carpeta / "modelo.png"), _dos_dientes(240))
+
+    vistos: list = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.dientes:
+            vistos.append(tuple(d.parecido for d in estado.dientes))
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+
+    _correr([255, ord("m"), 255, 255, ord("q")], monkeypatch)
+
+    assert len(set(vistos)) > 1, (
+        "se paso a la otra foto de modelo y el parecido no se movio: comparten el recorte"
+    )
+
+
+def test_al_archivar_el_aviso_se_pinta_antes_de_medirse(taller: Path, monkeypatch) -> None:
+    """Medirse cuesta --118 ms con 15 fotos del microscopio, 575 ms con 41 y 1554 ms con
+    121-- y corre adentro del mismo cuadro que archiva: mientras tanto la ventana se queda
+    con el cuadro anterior y SIN aviso, y el operario que no ve nada vuelve a apretar."""
+    from afilado.memoria import Memoria
+
+    secuencia: list = []
+    medirse = Memoria.autoevaluacion
+
+    def medirse_espiada(self):
+        secuencia.append("se mide")
+        return medirse(self)
+
+    monkeypatch.setattr(Memoria, "autoevaluacion", medirse_espiada)
+
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.mensaje and "GUARDADA" in estado.mensaje:
+            secuencia.append("se pinta el aviso")
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+
+    _correr([ord("a"), 255, ord("q")], monkeypatch)
+
+    assert "se pinta el aviso" in secuencia, "nunca se pinto el aviso de GUARDADA"
+    # Despues del aviso TIENE que quedar una medicion: comparar contra la PRIMERA
+    # 'se mide' hace fallar la prueba cuando la coleccion ya tiene fotos, porque ahi
+    # memoria.resumen() del arranque ya se midio una vez.
+    assert "se mide" in secuencia[secuencia.index("se pinta el aviso"):], (
+        f"la ventana se queda sin aviso mientras la memoria se mide: {secuencia}"
+    )
+
+
+def test_al_archivar_queda_escrito_lo_que_mostraba_la_pantalla(
+    taller: Path, monkeypatch
+) -> None:
+    """La columna 'parecido' es cuanto se parecio AL ESTADO que puso el operario, asi que
+    por este camino queda vacia y esta bien. Pero lo que mostraba la pantalla --el
+    concepto y el porcentaje con los que el operario decidio-- no puede perderse: es la
+    otra mitad de lo que un reclamo necesita ver."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+
+    # La primera 'a' deja una foto en la memoria; para la segunda ya hay con que comparar.
+    _correr([_ESPACIO, ord("a"), ord(" "), ord("a"), ord("q")], monkeypatch)
+
+    segundo = _ordenes(taller).abierta.sierras[0].revisados[1]
+    assert segundo.parecido is None
+    assert "en pantalla decia" in segundo.origen and "%" in segundo.origen
+
+
+def test_el_renglon_que_se_contradice_viene_explicado() -> None:
+    """"afilado RECHAZADO 42%" en el mismo renglon: el estado es el concepto de la foto
+    archivada que mas se parecio y el APROBADO/RECHAZADO sale de si ese parecido llega al
+    umbral, dos criterios distintos. Reproducido en el informe de verdad con el taller de
+    hoy. Ningun numero es falso; lo que falla es que el papel de un reclamo se contradice
+    y no dice por que."""
+    from afilado import revision
+    from afilado.config import AppConfig
+
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    cfg.interfaz.umbral_parecido = 0.70
+    estado = revision.EstadoRevision(dientes=[revision.DienteEnPantalla(
+        caja=(0, 0, 100, 100), parecido=0.42, aprobado=False, concepto="afilado",
+        elegido=True,
+    )])
+
+    resultado = run_live._resultado_del_diente(estado, cfg)
+
+    assert resultado.estado == "afilado" and resultado.aprobado is False
+    assert "42%" in resultado.origen and "70% para aprobar" in resultado.origen
+
+
+def test_la_tecla_g_anota_de_donde_salio_el_veredicto(taller: Path, monkeypatch) -> None:
+    """El origen es "de donde salio el veredicto", no quien apreto la tecla: asi esta
+    documentado en ordenes.Diente.origen. Decia "lo anoto el operario" al lado de un
+    APROBADO que habia puesto el programa, y en el .csv eso se lee igual que el renglon de
+    la tecla 'a', donde el estado SI lo eligio el operario."""
+    orden = _correr_automatico(taller, monkeypatch, _Quieta, [ord("g"), ord("q")])
+
+    diente = orden.sierras[0].revisados[0]
+    assert diente.aprobado is not None, "sin veredicto en pantalla no prueba nada"
+    assert "lo anoto el operario" in diente.origen
+    assert diente.origen != "lo anoto el operario", "eso dice quien apreto la tecla"
+
+
+def test_la_g_sin_veredicto_deja_dicho_que_no_habia_veredicto(
+    taller: Path, monkeypatch
+) -> None:
+    """Sin modelo y sin memoria el renglon se iba en blanco --el informe lo imprime como
+    'sin decidir'-- contado como revisado y sin ninguna nota, que es como se ve un diente
+    que el programa no se animo a juzgar. No es lo mismo: no habia nada que juzgar."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+
+    _correr([ord("g"), ord("q")], monkeypatch)
+
+    diente = _ordenes(taller).abierta.sierras[0].revisados[0]
+    assert diente.estado is None and diente.aprobado is None
+    assert diente.nota != "", "renglon contado como revisado, en blanco y sin explicacion"

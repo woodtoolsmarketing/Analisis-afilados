@@ -94,6 +94,12 @@ _MAX_FRAMES_NULOS = 30
 # Duracion de la confirmacion verde tras guardar. Suficiente para leerla sin
 # taparle la pieza al operario.
 _SEGUNDOS_MENSAJE = 1.5
+# LO QUE SE LE DICE AL OPERARIO CUANDO LA ORDEN NO LLEGO AL DISCO. Antes no se le decia
+# nada: ordenes.guardar() devolvia None, nadie lo miraba, y el operario seguia anotando
+# dientes toda la tarde contra una orden que no existia en ningun archivo. Reproducido con
+# el disco lleno: el programa salia con codigo 0, cuatro guardados fallidos, y en disco no
+# habia orden. Con el .exe sin consola, el log en un archivo no lo lee nadie.
+_NO_SE_GUARDO = "NO SE PUDO GUARDAR LA ORDEN - revise el disco"
 
 _ESC = 27
 
@@ -344,6 +350,12 @@ def _analizar_dientes(
     # el mismo par da 42% cuadro contra cuadro y 45% recorte contra recorte-- pero nunca
     # se muestran juntas: con varios dientes el cartel pasa a ser el resumen.
     uno_solo = len(encontrados) == 1
+    # CUAL SE MIRA PRIMERO. No el de la izquierda: el mas parecido a una cara de widia.
+    # En las fotos del taller el HUECO entre dos dientes pasa el filtro de area igual que
+    # la cara, y cuando cae a la izquierda quedaba primero --o sea que era el que se
+    # archivaba y el que iba al informe-- con el diente de verdad al lado, sin elegir.
+    # Pasa en 1 de las 14 fotos de cerca. Ver dientes._medir_rayado para los numeros.
+    por_defecto = dientes.mas_parecido_a_diente(encontrados)
 
     listos = memoria is not None and memoria.lista_para_juzgar(
         cfg.memoria.minimo_por_concepto
@@ -358,7 +370,7 @@ def _analizar_dientes(
     en_pantalla: list[revision.DienteEnPantalla] = []
     for indice, encontrado in enumerate(encontrados):
         recorte = encontrado.recortar(frame)
-        parecido = aprobado = concepto = ejemplo = None
+        parecido = aprobado = concepto = ejemplo = modelo = None
         juicio = None
         if listos:
             juicio = memoria.juzgar(
@@ -377,10 +389,15 @@ def _analizar_dientes(
             if vecino is not None:
                 parecido = vecino.parecido
                 concepto = vecino.concepto
-                aprobado = (
-                    parecido >= float(cfg.interfaz.umbral_parecido)
-                    and concepto not in cfg.clases_defecto
-                )
+                # El veredicto sale de un PARECIDO, no de la memoria juzgando: si la
+                # llave que apaga eso esta en false, aca tampoco se pinta. Antes esta rama
+                # no la miraba, asi que poner veredicto_por_parecido: false apagaba el
+                # cartel pero dejaba el recuadro verde y la orden anotando APROBADO.
+                if getattr(cfg.interfaz, "veredicto_por_parecido", False):
+                    aprobado = (
+                        parecido >= float(cfg.interfaz.umbral_parecido)
+                        and concepto not in cfg.clases_defecto
+                    )
                 ejemplo = _foto_por_ruta(vecino.archivo, ejemplos)
         else:
             # CONTRA EL DIENTE DE LA FOTO DE MODELO, no contra la foto entera. Comparar un
@@ -391,10 +408,19 @@ def _analizar_dientes(
             # APROBADO en verde, con los dos numeros sacados de la misma pieza.
             mirar = frame if uno_solo else recorte
             if uno_solo and todas_las_modelo:
-                # Contra TODAS las fotos de modelo, quedandose con la mejor.
-                valores = [revision.parecido(mirar, m) for m in todas_las_modelo]
-                valores = [v for v in valores if v is not None]
-                parecido = max(valores) if valores else None
+                # Contra TODAS las fotos de modelo, quedandose con la mejor. Y SE GUARDA
+                # CUAL GANO, porque la cabecera nombra la que eligio el operario con 'm' y
+                # casi nunca es la misma: medido con una foto del taller y los tres
+                # modelos reales, el cartel decia APROBADO 80% --que sale de
+                # modelo_20261112_161523-- mientras contra la foto nombrada arriba
+                # (modelo_20261112_161319) el parecido era 62%, o sea DESAPROBADO.
+                medidos = []
+                for nombre_modelo, foto_modelo in todas_las_modelo:
+                    valor = revision.parecido(mirar, foto_modelo)
+                    if valor is not None:
+                        medidos.append((valor, nombre_modelo))
+                if medidos:
+                    parecido, modelo = max(medidos)
             else:
                 contra = (
                     referencia_entera if uno_solo and referencia_entera is not None
@@ -406,7 +432,8 @@ def _analizar_dientes(
         en_pantalla.append(
             revision.DienteEnPantalla(
                 caja=encontrado.caja, parecido=parecido, aprobado=aprobado,
-                concepto=concepto, ejemplo=ejemplo, elegido=indice == 0, juicio=juicio,
+                concepto=concepto, ejemplo=ejemplo, elegido=indice == por_defecto,
+                juicio=juicio, modelo=modelo, entero=encontrado.entero,
             )
         )
     return en_pantalla
@@ -458,24 +485,50 @@ def _barra_de_la_sierra(orden) -> list[str]:
     return barra
 
 
-def _resultado_del_diente(estado: revision.EstadoRevision, cfg: AppConfig) -> Optional[Resultado]:
-    """El veredicto que la captura automatica va a confirmar, o None si no hay.
+def _resultado_del_diente(
+    estado: revision.EstadoRevision, cfg: AppConfig, quien: str = "anotado solo"
+) -> Optional[Resultado]:
+    """El veredicto que se va a anotar, o None si no hay.
 
-    Se usa el PRIMER diente de la imagen. Con la sierra pasando de a uno es el unico que
-    hay; si entraran dos, anotar el de la izquierda y seguir es mejor que anotar los dos
-    juntos como si fueran el mismo.
+    Se usa el diente ELEGIDO, que con un solo diente a la vista --lo normal-- es el unico
+    que hay. Antes se usaba siempre `dientes[0]`: con dos dientes en la imagen, el operario
+    apretaba '2' para que la pantalla marcara el de la derecha, apretaba 'g', y el informe
+    anotaba el de la IZQUIERDA. El recuadro marcado y el renglon del informe hablaban de
+    dientes distintos, y eso recien se ve cuando llega el reclamo.
     """
     if not estado.dientes:
         return None
-    diente = estado.dientes[0]
+    diente = next((d for d in estado.dientes if d.elegido), estado.dientes[0])
     if diente.aprobado is None and diente.concepto is None:
         return None
-    origen = "la memoria" if diente.juicio is not None else "comparando con la foto de modelo"
+    # DE DONDE SALIO EL NUMERO, dicho como fue. El informe es el papel con el que se
+    # contesta un reclamo, y antes decia "comparando con la foto de modelo" en los tres
+    # casos: tambien cuando el numero lo habia puesto la memoria contra las fotos
+    # archivadas, que es una comparacion distinta y contra otras fotos.
+    if diente.juicio is not None and diente.juicio.decidio:
+        origen = "la memoria"
+    elif diente.concepto is not None:
+        origen = "la foto archivada mas parecida"
+        # EL ESTADO Y EL RESULTADO DE ESTE RENGLON SALEN DE DOS CRITERIOS DISTINTOS, y en
+        # el papel con el que se contesta un reclamo hay que decirlo: el estado es el
+        # concepto de la foto archivada que mas se parecio, y el APROBADO/RECHAZADO sale de
+        # si ese parecido llega al umbral. Reproducido en el bucle con el taller de hoy
+        # --14 fotos en 'afilado', un solo concepto--: el renglon salia "afilado RECHAZADO
+        # 32%" sin nada que lo explicara, y la leyenda del propio informe dice que 'estado'
+        # es en que quedo cada diente.
+        if diente.aprobado is False and diente.concepto not in cfg.clases_defecto:
+            origen += (
+                f", que es de {diente.concepto}, pero al "
+                f"{(diente.parecido or 0.0) * 100:.0f}%: hace falta "
+                f"{float(cfg.interfaz.umbral_parecido) * 100:.0f}% para aprobar"
+            )
+    else:
+        origen = "comparando con las fotos de modelo"
     return Resultado(
         estado=diente.concepto,
         parecido=diente.parecido,
         aprobado=diente.aprobado,
-        origen=f"{origen}, anotado solo",
+        origen=f"{origen}, {quien}",
     )
 
 
@@ -559,27 +612,49 @@ def _panel_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
         pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
         pan.campo, pan.aviso = 0, None
     elif accion == "siguiente_sierra" or tecla == ord("s"):
-        numero = orden.siguiente_sierra()
-        ordenes.guardar()
-        return True, f"SIERRA {numero} de {len(orden.sierras)}"
+        posicion = orden.siguiente_sierra()
+        if ordenes.guardar() is None:
+            return True, _NO_SE_GUARDO
+        # Se nombra el NUMERO de la sierra, no la posicion: es el que sale en el informe.
+        # Para una orden cargada a mano son el mismo.
+        sierra = orden.sierra()
+        return True, f"SIERRA {posicion if sierra is None else sierra.numero} de {len(orden.sierras)}"
     elif accion == "saltear_diente" or tecla == ord("x"):
         diente = orden.saltear()
-        ordenes.guardar()
+        if ordenes.guardar() is None:
+            return True, _NO_SE_GUARDO
         if diente is None:
             pan.aviso = "esta sierra ya tiene todos los dientes revisados"
             return True, None
         return True, f"DIENTE {diente.numero} SALTEADO"
     elif accion == "informe" or tecla == ord("i"):
-        texto, _ = ordenes.escribir_informe()
-        if texto is None:
+        texto, planilla = ordenes.escribir_informe()
+        if texto is None and planilla is None:
             pan.aviso = "no se pudo escribir el informe; revise el disco"
             return True, None
+        if texto is None:
+            # QUE MITAD SALIO SE DICE. El .txt es el papel que se entrega y el .csv el que
+            # se abre en Excel; ahora se escriben por separado, asi que puede salir uno y
+            # no el otro. Callarlo deja al operario creyendo que el informe esta completo,
+            # con el anterior todavia en disco para confundirlo.
+            pan.aviso = "el .txt del informe no salio; revise el disco"
+            return True, f"PLANILLA EN {planilla.name}"
+        if planilla is None:
+            pan.aviso = "la planilla .csv no salio; revise el disco"
         return True, f"INFORME EN {texto.name}"
     elif accion == "cerrar_orden":
         numero = orden.numero
-        ordenes.escribir_informe()
-        ordenes.cerrar()
+        # PRIMERO SE CIERRA Y DESPUES SE ESCRIBE. Al reves, el informe que se le entrega
+        # al cliente en la mano llevaba impreso "Cerrada: sigue abierta", porque se
+        # generaba un instante antes de poner la fecha de cierre. cerrar() devuelve la
+        # orden ya cerrada, que es la que hay que imprimir.
+        cerrada = ordenes.cerrar()
+        texto, planilla = ordenes.escribir_informe(cerrada)
         pan.orden = None
+        if texto is None:
+            return True, f"ORDEN {numero} CERRADA - NO SE PUDO ESCRIBIR EL INFORME"
+        if planilla is None:
+            return True, f"ORDEN {numero} CERRADA - el .txt quedo guardado, la planilla NO"
         return True, f"ORDEN {numero} CERRADA - el informe quedo guardado"
     return True, None
 
@@ -604,10 +679,48 @@ def _cargar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
         except ValueError as error:
             pan.aviso = str(error)
             return True, None
-        if ordenes.cargar(orden.numero) is not None:
-            pan.aviso = f"ya hay una orden {orden.numero} guardada; usa otro numero"
-            return True, None
+        if ordenes.existe(orden.numero):
+            # existe() y no cargar(): un .json roto no se puede leer, pero esta, y
+            # escribirle encima borra la unica copia del trabajo de ese dia.
+            # Y SE NOMBRA EL ARCHIVO, no el numero tecleado: dos numeros distintos caen en
+            # el mismo archivo --"OA 123" y "OA/123" dan los dos OA_123.json-- asi que
+            # decir "ya hay una orden OA/123" seria mentir sobre lo que esta guardado.
+            archivo = ordenes.ruta(orden.numero).name
+            guardada = ordenes.cargar(orden.numero)
+            if guardada is None or guardada.cerrada:
+                pan.aviso = f"ya hay una orden guardada en {archivo}; usa otro numero"
+                return True, None
+            # SIN CERRAR: se ofrece RETOMARLA. Antes esto era un callejon --"usa otro
+            # numero"-- cuando lo que el operario casi siempre quiere es seguir la orden
+            # que ya habia empezado, y el programa no tenia como volver a ella. No se
+            # retoma sola porque el formulario trae sierras, dientes y cliente nuevos que
+            # se perderian sin avisar: hace falta un ENTER mas, y si se cambia cualquier
+            # dato del formulario se vuelve a preguntar.
+            huella = "|".join(valores)
+            if pan.retomar != huella:
+                pan.retomar = huella
+                pan.aviso = (
+                    f"ya hay una orden sin cerrar en {archivo}: "
+                    f"{guardada.total_revisados} de {guardada.total_dientes} dientes. "
+                    "ENTER otra vez para RETOMARLA, o cambia el numero"
+                )
+                return True, None
+            pan.retomar = ""
+            retomada = ordenes.retomar(orden.numero)
+            if retomada is None or ordenes.fallo_al_guardar:
+                pan.aviso = f"no se pudo retomar {archivo}; revise el disco"
+                return True, None
+            pan.orden, pan.cargando_orden, pan.aviso = retomada, False, None
+            return True, (
+                f"ORDEN {retomada.numero} RETOMADA: "
+                f"{retomada.total_revisados} de {retomada.total_dientes} dientes"
+            )
         ordenes.abrir(orden)
+        if ordenes.fallo_al_guardar:
+            # No se anuncia una orden que no llego al disco: el operario la daria por
+            # abierta y se pasaria la tarde anotando dientes contra un archivo inexistente.
+            pan.aviso = _NO_SE_GUARDO
+            return True, None
         pan.orden, pan.cargando_orden, pan.aviso = orden, False, None
         return True, f"ORDEN {orden.numero}: {len(orden.sierras)} sierras de {orden.sierras[0].dientes} dientes"
 
@@ -1172,8 +1285,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         if memoria is not None:
             memoria.sincronizar(conceptos.mapa(), guardar=not recalcular)
             if recalcular:
-                # Medirse cuesta, asi que se hace aca --justo despues de un cambio, con el
-                # operario mirando un cartel-- y no en medio de un veredicto.
+                # Medirse cuesta y se paga ACA, con el aviso de GUARDADA ya pintado en
+                # pantalla por archivar(): medido, 118 ms con 15 fotos del microscopio,
+                # 575 ms con 41 y 1554 ms con 121. Ojo que resumen(), dos lineas mas
+                # abajo, tambien llama a autoevaluacion(), asi que la cuenta se paga
+                # igual: esta linea solo deja dicho donde se paga.
                 memoria.autoevaluacion()
             estado.resumen_memoria = memoria.resumen()
         if pan is not None:
@@ -1204,7 +1320,18 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         elegido = diente_elegido()
         if elegido is None:
             return imagen
-        return dientes.Diente(caja=elegido.caja, area=0.0).recortar(imagen)
+        # EL RECUADRO Y LOS PIXELES, DE LA MISMA FOTO. El recuadro se midio en el ultimo
+        # cuadro que paso por el analisis --uno de cada cinco-- y recortarlo de la foto de
+        # AHORA lo deja corrido lo que se movio la mano mientras tanto. Reproducido en el
+        # bucle con una pieza que corre 12 px por cuadro: apretando 'a' cuatro cuadros
+        # despues del analisis, el recuadro era (87,158,302,342) y la pieza ya estaba en
+        # (135,158,350,342) --48 px a la derecha-- y en el recorte archivado la pieza baja
+        # del 48% al 44% de los pixeles; a 20 px por cuadro cae al 36%. Eso entra corrido
+        # al dataset y a la memoria, que despues compara recortes asi contra recortes
+        # centrados. La foto que se le pasa a la captura automatica sigue siendo la de
+        # ahora: su freno compara huellas contra el cuadro en vivo.
+        cuadro = cuadro_analizado if cuadro_analizado is not None else imagen
+        return dientes.Diente(caja=elegido.caja, area=0.0).recortar(cuadro)
 
     def archivar(destino: str, imagen: np.ndarray) -> str:
         """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
@@ -1222,6 +1349,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             miniaturas.olvidar()
             _registro.info("nueva foto de modelo en %s", ruta)
             return f"MODELO AGREGADO: {ruta.stem}"
+        completa = imagen
         imagen = recorte_a_archivar(imagen)
         motivo = motivo_para_no_archivar(camara, imagen, cfg, almacen)
         if motivo is not None:
@@ -1229,10 +1357,25 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             return motivo
         ruta = almacen.guardar(imagen, destino)
         estado.capturas = almacen.total_guardados
-        refrescar()
-        miniaturas.olvidar()
         _registro.info("foto archivada en '%s': %s", destino, ruta.name)
         mensaje = f"GUARDADA como {destino}: {ruta.name}"
+        # EL CARTEL PRIMERO Y LA CUENTA DESPUES. refrescar() vuelve a medir la memoria
+        # contra si misma y eso TARDA: medido con fotos del microscopio a 640x480, 118 ms
+        # con 15 fotos repartidas en dos conceptos, 575 ms con 41 y 1554 ms con 121 --ahi
+        # lo frena
+        # maximo_autoevaluacion=120-- mas 7 a 26 ms de sincronizar. Mientras eso corre el
+        # bucle no vuelve a dibujar: la ventana se queda con el cuadro anterior y SIN
+        # aviso, asi que el operario ve que el programa se clava y vuelve a apretar la
+        # tecla. Con el panel abierto no se repinta, porque la pantalla es el panel y el
+        # panel avisa por su cuenta.
+        if pan is None:
+            estado.mensaje = mensaje
+            cv2.imshow(
+                _VENTANA, componer(completa, galeria.imagen_actual(), cfg, estado).imagen
+            )
+            cv2.pollKey()
+        refrescar()
+        miniaturas.olvidar()
 
         # Con una orden abierta, archivar un diente tambien lo ANOTA: el conteo avanza y
         # queda en el informe. Lo que vale como estado es lo que dijo el operario --el
@@ -1245,16 +1388,52 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             opinion = ""
             if juicio is not None and juicio.decidio:
                 opinion = f" (la memoria decia {juicio.concepto})"
+            elif elegido is not None and elegido.concepto and elegido.parecido is not None:
+                # LO QUE MOSTRABA LA PANTALLA TIENE QUE QUEDAR ESCRITO. Hoy el veredicto no
+                # lo da la memoria juzgando sino el parecido contra las fotos archivadas,
+                # asi que juicio es None y este renglon se iba al informe sin una sola
+                # cifra. Medido en el bucle con el taller de hoy: el cartel decia
+                # "APROBADO 100% - se parece a afilado" y el renglon quedaba con la columna
+                # parecido VACIA y nada mas. En la columna no puede ir --ahi va cuanto se
+                # parecio al estado que eligio el operario, que es otra cosa-- pero en el
+                # origen si, y asi el informe no pierde lo que se vio en pantalla.
+                opinion = (
+                    f" (en pantalla decia {elegido.concepto} al "
+                    f"{elegido.parecido * 100:.0f}%)"
+                )
+            # EL PORCENTAJE TIENE QUE SER DEL ESTADO QUE ESTA EN LA MISMA FILA. El informe
+            # dice que la columna 'parecido' es cuanto se parecio AL ESTADO que figura al
+            # lado, y por este camino el estado lo pone el operario mientras el porcentaje
+            # salia de la memoria, que podia estar opinando otra cosa. Paso en el bucle con
+            # las fotos del taller: la memoria decia mal_afilado al 66%, el operario lo
+            # archivaba como afilado, y el informe quedaba "afilado APROBADO 66%" --un
+            # numero que nadie midio sobre 'afilado'-- en el papel que contesta un reclamo.
+            # Si no coinciden, el porcentaje no va: lo que opinaba el programa queda dicho
+            # en el origen, con todas las letras.
+            coinciden = (
+                juicio is not None and juicio.decidio and juicio.concepto == destino
+            )
             diente = orden.anotar(
                 estado=destino,
-                parecido=juicio.parecido if juicio is not None else None,
+                parecido=juicio.parecido if coinciden else None,
                 aprobado=destino not in cfg.clases_defecto,
                 origen=f"lo archivo el operario{opinion}",
                 foto=ruta.name,
             )
-            ordenes.guardar()
+            guardado = ordenes.guardar()
             actualizar_orden()
-            if diente is None:
+            # ESTE DIENTE YA QUEDO ANOTADO: hay que decirselo a la captura automatica o lo
+            # anota de nuevo ella sola. Medido en el bucle con una orden abierta y la pieza
+            # quieta: una sola 'a' dejaba DOS renglones para el mismo diente, el primero
+            # con el estado que eligio el operario y el segundo con el que opinaba el
+            # programa un segundo despues. Se le pasa la foto COMPLETA y no el recorte,
+            # porque la huella del freno se toma sobre el cuadro entero.
+            automatica.ya_anotado(completa)
+            if guardado is None:
+                # La FOTO si se guardo --eso ya esta en disco-- pero el renglon de la
+                # orden no, y es lo que hay que decir: lo otro el operario lo da por hecho.
+                mensaje = _NO_SE_GUARDO
+            elif diente is None:
                 mensaje = "ESTA SIERRA YA ESTA COMPLETA - pase a la siguiente con 'o'"
             else:
                 sierra = orden.sierra()
@@ -1268,7 +1447,21 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     fotos_modelo: dict = {}
 
     def todas_las_de_modelo() -> list:
-        """Todas las fotos de modelo de la galeria, leidas una sola vez.
+        """Las PRIMERAS 24 fotos de modelo de la galeria, leidas una sola vez.
+
+        EL TOPE DE 24 ES DE COSTO, y lo que queda afuera no se compara contra nada: con 50
+        fotos en la carpeta se miran 24 y las otras 26 no se miran nunca. Medido con
+        cuadros de 640x480: el parecido contra 24 fotos cuesta 58 ms y contra 50 cuesta
+        117 ms --2.3 ms por foto-- asi que un analisis pasa de 21 ms con 3 fotos a 74 ms
+        con 24. El bucle espera 30 ms por tecla en cada cuadro y analiza uno de cada cinco;
+        la PC del taller es mas lenta que la de desarrollo, donde se midio esto, asi que
+        subir el tope hay que medirlo alla. Las 24 quedan en memoria: 0.9 MB cada una.
+
+        OJO CON UNA FOTO ILEGIBLE: si un archivo de la carpeta no se puede leer --un .jpg
+        a medio copiar-- la cache queda con menos entradas que nombres y no valida nunca,
+        asi que las demas vuelven del disco en cada analisis, tambien con menos de 24.
+        Medido con 3 fotos mas una cortada: 49 lecturas en 60 cuadros contra 4, y 22.6 ms
+        por cuadro contra 15.2.
 
         El parecido se mide contra la MEJOR de todas y no contra la que este elegida:
         medido sobre las fotos del taller, contra una sola foto ningun diente bueno pasaba
@@ -1283,13 +1476,20 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             p.name for p in carpeta.iterdir()
             if p.is_file() and p.suffix.lower() in EXTENSIONES
         )
-        if set(nombres) != set(fotos_modelo):
+        # LA CACHE SE COMPARA CONTRA LAS 24 QUE GUARDA, no contra todo lo que hay en la
+        # carpeta: arriba de 24 los dos conjuntos nunca eran iguales, asi que las 24 fotos
+        # se volvian a leer del disco en CADA analisis. Medido con 60 cuadros de 640x480 y
+        # clasificar_cada_n_frames=5: con 25 fotos en la carpeta, 289 cv2.imread y 21.6 ms
+        # por cuadro; con esta linea, 25 imread y 13.5 ms. Con 24 fotos ya andaba bien
+        # (25 imread, 14.8 ms), por eso en el taller --que tiene 3-- no se nota.
+        if set(nombres[:24]) != set(fotos_modelo):
             fotos_modelo.clear()
             for nombre in nombres[:24]:
                 imagen = cv2.imread(str(carpeta / nombre))
                 if imagen is not None:
                     fotos_modelo[nombre] = imagen
-        return list(fotos_modelo.values())
+        # Con el NOMBRE de cada una: la que gana es la que hay que escribir en el cartel.
+        return list(fotos_modelo.items())
 
     def recorte_modelo(referencia):
         """El DIENTE de la foto de modelo, recortado igual que el de la camara.
@@ -1299,14 +1499,30 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         """
         if referencia is None:
             return None
-        clave = galeria.nombre_actual or ""
+        # LA CLAVE LLEVA LA EXTENSION: nombre_actual viene sin ella, asi que modelo.jpg y
+        # modelo.png compartian el recorte. Reproducido en el bucle con dos dientes a la
+        # vista: con modelo.jpg (un diente) y modelo.png (dos dientes), la 'm' dejaba los
+        # parecidos clavados en (0.6823, 0.6173) --el recorte de la primera-- y la cabecera
+        # decia "modelo" las dos veces, asi que no habia como notarlo. Con nombres
+        # distintos el mismo par da (1.0000, 0.6328) sobre la que corresponde.
+        clave = galeria.archivo_actual or ""
         if clave not in recortes_modelo:
             if len(recortes_modelo) > 8:
                 recortes_modelo.clear()
-            encontrados = dientes.detectar(referencia, maximo=1)
-            recortes_modelo[clave] = (
-                encontrados[0].recortar(referencia) if encontrados else referencia
-            )
+            # CON LA MISMA REGLA QUE LA FOTO DE LA CAMARA. Con maximo=1 el que queda
+            # es el de MASCARA mas grande, y en las fotos del taller esa es la del hueco:
+            # medido sobre afilado_20261112_161626_660, maximo=1 devuelve
+            # (84,300,261,447) --el hueco, mascara 0.0443-- y la pantalla elige
+            # (237,63,323,308) --la cara de widia, mascara 0.0425 y rayado 43.6 contra
+            # 30.4--. Si la foto de modelo se recorta por el hueco, todo lo que se compare
+            # contra ella se mide contra un hueco. Pasa en 1 de las 36 fotos reales; en
+            # las otras 35 el recorte es el mismo.
+            encontrados = dientes.detectar(referencia, maximo=_MAX_DIENTES)
+            if encontrados:
+                cual = dientes.mas_parecido_a_diente(encontrados)
+                recortes_modelo[clave] = encontrados[cual].recortar(referencia)
+            else:
+                recortes_modelo[clave] = referencia
         return recortes_modelo[clave]
 
     def actualizar_orden() -> None:
@@ -1330,6 +1546,17 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
     frames_vistos = 0
     # La imagen congelada se juzga una sola vez, al congelarla; ver mas abajo.
     juzgado = False
+    # EL CUADRO SOBRE EL QUE SE MIDIERON LOS RECUADROS. El analisis corre uno de cada
+    # cada_n_frames cuadros --5 en el config del taller-- asi que cuando el operario
+    # aprieta 'a' el recuadro casi nunca es de la foto que la camara acaba de entregar.
+    cuadro_analizado: Optional[np.ndarray] = None
+    # CUAL DE LOS DIENTES ELIGIO EL OPERARIO, por numero y no por objeto. El analisis
+    # vuelve a armar la lista de dientes en cada cuadro, asi que si la eleccion viviera
+    # solo dentro de esos objetos se perderia al cuadro siguiente: en vivo, apretar '2'
+    # marcaba el diente de la derecha por unos milisegundos y despues la marca volvia sola
+    # al primero. None = el operario no eligio, y manda el que el analisis marco por
+    # defecto, que es el que mas cara de diente tiene y no el que esta mas a la izquierda.
+    elegido_diente: Optional[int] = None
     clase_candidata: Optional[str] = None
     repeticiones = 0
     vivo: Optional[np.ndarray] = None
@@ -1373,6 +1600,15 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                         estado.esperando_foco = True
                         estado.veredicto = None
                         clase_candidata, repeticiones = None, 0
+                        # Y SE OLVIDA EL CUADRO ANALIZADO. Con la imagen borrosa el
+                        # analisis no corre, asi que ese cuadro se queda viejo sin
+                        # limite; recortar de el al archivar saltea el control de
+                        # nitidez, que es el unico que frena una foto movida. Medido
+                        # con el microscopio tapado (nitidez 0.2, minimo 30): la "a"
+                        # pasaba de "IMAGEN MOVIDA - enfoque y repita" y cero fotos a
+                        # archivar una de cuatro cuadros antes, con nitidez 343, y con
+                        # una orden abierta a anotar ese diente en el informe.
+                        cuadro_analizado = None
                     else:
                         estado.esperando_foco = False
                         if clasificador is not None and frames_vistos % cada_n_frames == 0:
@@ -1404,17 +1640,42 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             # operario apretaba GUARDAR, esa misma foto entraba a la memoria y el cuadro
             # siguiente la encontraba ahi: el cartel pasaba a decir 100% del concepto que
             # el operario acababa de elegir. El programa se daba la razon a si mismo.
+            # EL VEREDICTO ES DE ESTE CUADRO O NO SE USA PARA ANOTAR. Se enciende recien
+            # abajo, cuando el analisis corre de verdad. Lo de antes era: el analisis se
+            # saltea --imagen fuera de foco, panel abierto, 1 de cada N cuadros-- pero
+            # estado.dientes se queda con lo ULTIMO que se vio, y la captura automatica
+            # seguia contando con eso. Medido en el bucle: tapando el microscopio con la
+            # mano durante cinco segundos, el informe anotaba el diente con el parecido de
+            # la foto de antes de taparlo.
+            #
+            # EL DIA QUE APAREZCA UN MODELO ENTRENADO, ESTO DEJA DE ANOTAR SOLO, y conviene
+            # saberlo de antemano para no buscarlo como si fuera una rotura nueva. Tanto
+            # juicio_fresco como estado.dientes se llenan unicamente en la rama de abajo,
+            # que corre cuando NO hay clasificador; con un .onnx entrenado la rama no corre,
+            # _resultado_del_diente no encuentra dientes y devuelve None, y la captura
+            # automatica no confirma nunca. No es una rotura de esta tanda --estado.dientes
+            # ya se llenaba solo ahi-- pero no estaba dicho en ningun lado. Para que ande
+            # con modelo hay que hacer dos cosas: que _resultado_del_diente sepa leer
+            # tambien estado.veredicto, y encender juicio_fresco en la rama del
+            # clasificador, donde hoy se decide clase_candidata.
+            juicio_fresco = False
             if clasificador is None and not estado.esperando_foco and pan is None:
                 if (estado.congelado and not juzgado) or (
                     not estado.congelado and frames_vistos % cada_n_frames == 0
                 ):
                     juzgado = estado.congelado
+                    juicio_fresco = True
                     estado.juicio = None
                     estado.dientes = _analizar_dientes(
                         a_mostrar, memoria, cfg, recorte_modelo(referencia), ejemplos,
                         referencia_entera=referencia,
                         todas_las_modelo=todas_las_de_modelo(),
                     )
+                    cuadro_analizado = a_mostrar
+                    if estado.dientes and elegido_diente is not None:
+                        cual = min(elegido_diente, len(estado.dientes) - 1)
+                        for numero, uno in enumerate(estado.dientes):
+                            uno.elegido = numero == cual
                     # Con UN solo diente --lo normal-- el cartel grande sigue siendo el de
                     # siempre, con lo que ese diente dio. Con varios, cada uno tiene lo
                     # suyo sobre su recuadro y el cartel pasa a ser el resumen.
@@ -1429,10 +1690,23 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                         if estado.dientes[0].parecido is not None:
                             estado.parecido = estado.dientes[0].parecido
             # LA CAPTURA AUTOMATICA. Con una orden abierta y la imagen en vivo, el
-            # programa mira una foto por segundo, la juzga, la tira, y cuando varias
+            # programa mira cinco fotos por segundo, las juzga, las tira, y cuando varias
             # seguidas dan lo mismo anota ese diente y pasa al siguiente. El operario
             # mueve la sierra y no toca una tecla.
+            #
+            # LA GUARDA DE FOCO NO LE CIERRA LA PUERTA A LAS FOTOS BUENAS, y habia que
+            # comprobarlo antes de ponerla: si las fotos del microscopio no llegaran al
+            # minimo de nitidez, esto dejaria de anotar para siempre y seria peor que el
+            # defecto que vino a tapar. Medido sobre las 14 fotos reales del taller a
+            # 640x480 contra el minimo de 30 que pide el config desplegado:
+            #
+            #     las 14 como salieron       nitidez 85.2 a 408.6 (mediana 279.7)   pasan 14
+            #     las mismas, desenfocadas   sigma 1.0: pasa 1 de 14; sigma 2.0: ninguna
+            #
+            # O sea que la puerta la cruzan todas las buenas y ninguna movida.
             if (ordenes.abierta is not None and not estado.congelado and pan is None
+                    and not estado.esperando_foco and juicio_fresco
+                    and not getattr(camara, "congelada", False)
                     and cfg.interfaz.segundos_entre_fotos > 0):
                 confirmado = automatica.mirar(
                     vivo, time.monotonic(), _resultado_del_diente(estado, cfg)
@@ -1446,9 +1720,11 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                         aprobado=confirmado.aprobado,
                         origen=confirmado.origen,
                     )
-                    ordenes.guardar()
+                    sin_guardar = ordenes.guardar() is None
                     actualizar_orden()
-                    if anotado is None:
+                    if sin_guardar:
+                        estado.mensaje = _NO_SE_GUARDO
+                    elif anotado is None:
                         estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
                     else:
                         sierra = orden.sierra()
@@ -1531,6 +1807,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 # miro, y una foto mal etiquetada no se nota hasta que el modelo sale raro.
                 indice = _TECLAS_DIGITO[tecla] - 1
                 if indice < len(estado.dientes):
+                    elegido_diente = indice
                     for numero, diente in enumerate(estado.dientes):
                         diente.elegido = numero == indice
                 continue
@@ -1547,18 +1824,45 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 orden = ordenes.abierta
                 if orden is None:
                     estado.mensaje = "NO HAY ORDEN ABIERTA - abrila con 'o'"
+                elif automatica.es_lo_ya_anotado(a_mostrar):
+                    # LA MISMA FOTO NO SE ANOTA DOS VECES. El freno es por "la imagen no
+                    # cambio" y no por "ya apretaste g": con la sierra en la mano cada
+                    # cuadro es distinto y hay que poder anotar diente tras diente, pero
+                    # con la imagen congelada --o con la pieza apoyada sin tocar-- la foto
+                    # es la misma y ese diente ya esta contado. Medido en el bucle con una
+                    # foto real del taller congelada y diez 'g': diez renglones, los diez
+                    # con el mismo parecido y el mismo instante.
+                    estado.mensaje = "ESTE DIENTE YA SE ANOTO - mueva la sierra"
                 else:
-                    resultado = _resultado_del_diente(estado, cfg)
+                    # EL ORIGEN DICE DE DONDE SALIO EL VEREDICTO, no quien apreto la
+                    # tecla: asi esta documentado en ordenes.Diente.origen. Decia "lo anoto
+                    # el operario" al lado de un "APROBADO 84%" que habia puesto el
+                    # programa, y en el .csv eso se lee igual que el renglon de 'a', donde
+                    # el estado SI lo eligio el operario. Y cuando no hay veredicto en
+                    # pantalla el renglon se iba en blanco --"sin decidir"-- contado como
+                    # revisado y sin una nota que dijera por que.
+                    resultado = _resultado_del_diente(
+                        estado, cfg, quien="lo anoto el operario"
+                    )
                     anotado = orden.anotar(
                         estado=resultado.estado if resultado else None,
                         parecido=resultado.parecido if resultado else None,
                         aprobado=resultado.aprobado if resultado else None,
-                        origen="lo anoto el operario",
+                        origen=(
+                            resultado.origen if resultado
+                            else "lo anoto el operario, sin veredicto en pantalla"
+                        ),
+                        nota="" if resultado else "no habia veredicto en pantalla",
                     )
-                    ordenes.guardar()
+                    sin_guardar = ordenes.guardar() is None
                     actualizar_orden()
-                    automatica.reiniciar()
-                    if anotado is None:
+                    # Igual que al archivar: el diente quedo anotado, asi que la captura
+                    # automatica tiene que frenarse sobre el. Con reiniciar() sola --que
+                    # solo olvida la racha-- un segundo despues lo anotaba otra vez.
+                    automatica.ya_anotado(vivo)
+                    if sin_guardar:
+                        estado.mensaje = _NO_SE_GUARDO
+                    elif anotado is None:
                         estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
                     else:
                         sierra = orden.sierra()
@@ -1624,6 +1928,21 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 # que alguien haya copiado ahi con el programa abierto, sin reiniciar.
                 galeria.recargar()
                 nombre = galeria.siguiente()
+                # CAMBIO EL MODELO, ASI QUE HAY QUE VOLVER A JUZGAR. Con la imagen
+                # congelada el veredicto se calcula una sola vez, y esa bandera dejaba la
+                # cabecera nombrando el modelo nuevo con el porcentaje del anterior.
+                # Reproducido con dos dientes a la vista y tres modelos: congelado, dos
+                # 'm' movian la cabecera de mod0 a mod2 y los parecidos quedaban clavados
+                # en (0.6823, 0.6173), mientras que en vivo las mismas teclas los movian a
+                # (0.7258, 0.7333) y (0.6906, 0.7680). La bandera sigue frenando el
+                # OJO, NO TAPA EL CASO 'a' Y DESPUES 'm': ahi la foto ya entro a la
+                # memoria y volver a juzgar la encuentra a si misma. Medido congelado con
+                # una foto archivada: el cartel pasa de '28% - la que mas se parece de las
+                # fotos de modelo' a '20% - se parece a aprobada, la foto archivada mas
+                # parecida'. No anota nada --con la imagen congelada la captura automatica
+                # no corre-- y el cartel dice de donde sale el numero, pero el operario ve
+                # moverse un numero que no tiene que ver con el modelo que eligio.
+                juzgado = False
                 estado.mensaje = (
                     f"MODELO: {nombre}" if nombre else "NO HAY FOTOS DE MODELO"
                 )

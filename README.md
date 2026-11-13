@@ -620,22 +620,54 @@ mejores candidatas de cada concepto-- y abrir el programa con todas esas fotos y
 tarda 51 ms. La cache vive en `data/memoria/` y se puede borrar sin perder nada: se rehace
 sola leyendo las fotos.
 
-> **APOYAR LA PIEZA SIEMPRE CON LA MISMA ORIENTACION.** Es la unica recomendacion de uso que
-> hace falta, y sale de una medicion, no de una corazonada. Volviendo a juzgar las 19 fotos
-> del taller despues de perturbarlas como pasa de verdad al reapoyar la pieza, el veredicto
-> se mantiene en:
+> **TODOS LOS CONCEPTOS SE SACAN CON EL MISMO ENCUADRE.** Esta es la regla que mas plata
+> puede costar si no se respeta, y tambien sale de una medicion.
+>
+> La memoria separa por **como se ve la foto entera**, y el encuadre es parte de como se ve.
+> Medido sobre las 14 fotos que saco el taller el 12/11/2026, que estan **todas** archivadas
+> en `afilado` --para el operario son todas la misma cosa-- pero 10 salieron del cuadro casi
+> entero y 4 son recortes chicos de un diente: etiquetandolas a proposito por encuadre y
+> escondiendo una por vez, la memoria acerto **14 de 14, todas al 100% de confianza**. No
+> miro el filo ni una vez.
+>
+> El mismo efecto esta en el porcentaje de la pantalla. Comparando cada foto contra las otras
+> trece:
+>
+> | encuadre | parecido | pasan el 70% |
+> |---|---|---|
+> | las 10 de cuadro entero | 81,6% a 92,1% (mediana 88,7%) | 10 de 10 |
+> | los 4 recortes de diente | 39,0% a 68,6% (mediana 58,9%) | **0 de 4** |
+>
+> Y la foto mas parecida fue siempre del mismo encuadre, 14 de 14.
+>
+> **Que significa esto en la practica:** si `afilado` se saca de lejos y `mal_afilado` de
+> cerca, el programa va a decir `mal_afilado 100%` y va a estar leyendo el encuadre, no el
+> filo. El informe de un reclamo diria que un diente esta mal por como se apoyo la camara.
+> Sacá todas las fotos de todos los conceptos a la misma distancia y con el diente ocupando
+> el mismo lugar del cuadro.
+>
+> De donde salen hoy los dos encuadres: lo que se archiva es el **recorte del diente
+> elegido**, y cuando el programa no logra separar ningun diente, ese "recorte" termina
+> siendo el cuadro entero. Por eso en la misma carpeta hay fotos de 640x446 y de 253x257.
+
+> **APOYAR LA PIEZA SIEMPRE CON LA MISMA ORIENTACION.** Es la otra recomendacion de uso que
+> hace falta, y sale de una medicion, no de una corazonada. Volviendo a juzgar las **14
+> fotos del microscopio de hoy** despues de perturbarlas como pasa de verdad al reapoyar la
+> pieza, el parecido se mantiene sobre el 70% en:
 >
 > | perturbacion | se mantiene | | perturbacion | se mantiene |
 > |---|---|---|---|---|
-> | quieta (control) | 19 de 19 | | mas luz (+25%) | 19 de 19 |
-> | corrida 10 px | 19 de 19 | | menos luz (-25%) | 19 de 19 |
-> | corrida 25 px | 19 de 19 | | girada 3 grados | 17 de 19 |
-> | corrida 50 px | 19 de 19 | | girada 7 grados | 16 de 19 |
-> | | | | girada 15 grados | **10 de 19** |
+> | quieta (control) | 14 de 14 | | mas luz (+25%) | 14 de 14 |
+> | corrida 10 px | 14 de 14 | | menos luz (-25%) | 14 de 14 |
+> | corrida 25 px | 14 de 14 | | girada 3 grados | 13 de 14 |
+> | corrida 50 px | 14 de 14 | | girada 7 grados | 8 de 14 |
+> | | | | girada 15 grados | **1 de 14** |
 >
-> O sea: **correrla y la luz no mueven el veredicto; girarla si.** El programa normaliza la
-> luz y busca el mejor calce para el encuadre, pero no prueba angulos --costaria una
-> comparacion por cada angulo-- asi que una pieza bien girada se le vuelve otra pieza.
+> O sea: **correrla y la luz no mueven el veredicto; girarla si**, y mas de lo que decia la
+> tabla anterior, que estaba medida con la camara que ya no se usa y daba 10 de 19 a 15
+> grados. El programa normaliza la luz y busca el mejor calce para el encuadre --por eso
+> aguanta 50 px de corrimiento sin perder un punto-- pero no prueba angulos, asi que una
+> pieza bien girada se le vuelve otra pieza.
 
 #### El panel de CONCEPTOS (tecla `c`)
 
