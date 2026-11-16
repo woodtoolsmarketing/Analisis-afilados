@@ -171,11 +171,33 @@ class InterfazConfig:
     # Cada cuanto se mira una foto. Con 0.2 y cinco confirmaciones, el operario apoya el
     # diente UN SEGUNDO y queda anotado.
     #
-    # UN SEGUNDO ES EL MINIMO, no la unica condicion: la racha solo cierra si en ese
-    # segundo la pieza se movio menos que automatico.DISTANCIA_MISMA_FOTO, que estan
-    # medidos unos 4 px sobre las fotos del taller. Medido en el bucle apoyando seis
-    # dientes: con un temblor de mano de hasta 2 px los anota a los seis, con 4 px no anota
-    # ninguno. Sirve con la sierra apoyada o sostenida con pulso firme; no sirve pasando la
+    # UN SEGUNDO ES EL MINIMO Y NO ALCANZA: HAY QUE APOYAR 1.2 s.
+    #
+    # Medido con el bucle de verdad, el reloj de verdad y las 15 fotos del taller del
+    # 16/11, pasandolas como 15 dientes con una orden abierta:
+    #
+    #     apoyo por diente   pulso firme   temblor 1 px   temblor 2 px
+    #         0.6 s            0 de 15        0 de 15        0 de 15
+    #         1.0 s            8 de 15        8 de 15        2 de 15
+    #         1.2 s           14 de 15       14 de 15        7 de 15
+    #         1.5 s           14 de 15       13 de 15        5 de 15
+    #         2.0 s           14 de 15       14 de 15       12 de 15
+    #
+    # (el que falta siempre es el ultimo: la camara de prueba se apaga justo cuando
+    # termina su turno, no es el programa.)
+    #
+    # POR QUE EL TEMBLOR MOLESTA, que no es lo que parece. No es la huella: a 2 px de
+    # corrimiento la distancia da 0.0097-0.0160 contra un corte de 0.04, y recien a 8 px
+    # se pasa. No es el veredicto: la memoria dice lo mismo en 15 de 15 fotos hasta 3 px.
+    # No es la nitidez: pasan 15 de 15. Es que las CINCO fotos de la racha se comparan
+    # contra la PRIMERA --lo que impide que una pieza que se desliza sin parar se anote
+    # sola-- y con temblor al azar caer cinco veces seguidas cerca de la primera cuesta:
+    #
+    #     temblor      0 px   1 px   1.5 px   2 px   3 px
+    #     la racha cierra  100%    96%     75%    44%    13%
+    #
+    # O sea que con la mano temblando no hay que apretar mas fuerte: hay que APOYAR MAS
+    # TIEMPO, porque cada intento vuelve a tener su chance. Lo que no sirve es pasar la
     # sierra de largo sin detenerse en cada diente.
     #
     # Arranco en 1.0 y era inusable: cinco fotos a una por segundo son CINCO SEGUNDOS de
