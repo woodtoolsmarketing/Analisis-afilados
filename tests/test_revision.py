@@ -282,7 +282,11 @@ def test_antes_de_revisar_no_dice_ni_aprobado_ni_desaprobado(cfg: AppConfig) -> 
     assert titulo == "ESPERANDO" and aprobado is None
     assert not _color_pintado(pantalla, revision._VERDE_OK)
     assert not _color_pintado(pantalla, revision._ROJO_NO)
-    assert set(pantalla.botones) == {"revisar", "conceptos", "salir"}
+    # ORDENES esta aca porque es la UNICA entrada visible al historial de ordenes: la tecla
+    # 'o' sola no alcanza, no esta escrita en ninguna pantalla y un operario que no la sepa
+    # no puede cargar ni ver una orden. Si alguna vez se saca este boton, hay que poner otro
+    # camino a la vista antes.
+    assert set(pantalla.botones) == {"revisar", "ordenes", "conceptos", "salir"}
 
 
 @pytest.mark.parametrize("congelado", [False, True])
@@ -624,6 +628,31 @@ def test_si_la_memoria_no_se_anima_no_se_inventa_un_veredicto(cfg: AppConfig) ->
     assert titulo == "NO ESTOY SEGURO"
     assert aprobado is None and color == revision._AMBAR
     assert "muy parejo" in detalle
+
+
+def test_cuando_le_faltan_fotos_el_cartel_no_dice_que_duda(cfg: AppConfig) -> None:
+    """NO ES LO MISMO DUDAR QUE NO PODER NOMBRAR, y lo que hay que hacer es distinto.
+
+    La memoria reconoce lo que ve --es el concepto que mas se le parece-- pero ese concepto
+    no llego al minimo de fotos, asi que no puede ser un veredicto. Con el cartel de la
+    duda el operario no tenia como saber que alcanzaba con archivar UNA foto para
+    destrabarlo: se quedaba mirando "NO ESTOY SEGURO" en todos los dientes.
+    """
+    estado = revision.EstadoRevision(
+        congelado=True,
+        juicio=_juicio(
+            concepto=None,
+            falta_fotos="Sierra_Nueva_TP",
+            motivo="se parece a Sierra_Nueva_TP, que tiene 2 de las 3 fotos que hacen "
+                   "falta para decidir: sacale una mas y archivala ahi",
+        ),
+    )
+
+    titulo, detalle, color, aprobado = revision.estado_resultado(estado, cfg)
+
+    assert titulo == "FALTAN FOTOS"
+    assert aprobado is None and color == revision._AMBAR
+    assert "Sierra_Nueva_TP" in detalle and "2 de las 3" in detalle
 
 
 def test_sin_vecinos_el_cartel_dice_que_falta_memoria(cfg: AppConfig) -> None:
@@ -977,3 +1006,53 @@ def test_con_el_diente_encontrado_no_aparece_ese_aviso() -> None:
     estado = revision.EstadoRevision(congelado=True, parecido=0.88, dientes=[diente])
 
     assert "NO ENCUENTRO EL DIENTE" not in (revision.detalle_extra(estado, cfg) or "")
+
+
+def test_el_porcentaje_solo_dice_asi_de_parejo_si_lo_midio_asi(cfg: AppConfig) -> None:
+    """EL MISMO NUMERO MAL NOMBRADO FUE LO QUE FRENO EL TALLER EL 16/11/2026.
+
+    Con pocas fotos la memoria no puede medir una banda alrededor de este margen: lo que
+    devuelve es su acierto global. Llamarlo "asi de parejo" le pone al numero un nombre que
+    no le corresponde, y el operario lee que el programa midio algo que no midio.
+    """
+    con_banda = revision.EstadoRevision(
+        congelado=True,
+        juicio=_juicio(confianza=0.84, confianza_por_banda=True),
+    )
+    sin_banda = revision.EstadoRevision(
+        congelado=True,
+        juicio=_juicio(confianza=0.77, confianza_por_banda=False),
+    )
+
+    assert "asi de parejo" in str(revision.detalle_extra(con_banda, cfg))
+    extra = str(revision.detalle_extra(sin_banda, cfg))
+    assert "asi de parejo" not in extra
+    assert "77% de las veces que decide" in extra
+
+
+def test_en_modo_revision_los_botones_de_guardar_son_conceptos_de_verdad(
+    cfg: AppConfig,
+) -> None:
+    """UN BOTON QUE NO HACE NADA ES UNA PROMESA QUE EL PROGRAMA NO CUMPLE.
+
+    Los dos botones de guardar de la pantalla de revision estaban clavados en las claves
+    "aprobada" y "rechazada". El bucle archiva con `accion in cfg.clases`, asi que con los
+    conceptos de verdad del taller --Sierra_Afilada, Dientes_rotos, Diente_sin_placa,
+    Sierra_Nueva_TP-- esas dos claves no son ningun concepto: el operario apretaba GUARDAR
+    APROBADA, no pasaba nada y la pantalla no decia por que. La tecla 'a' si andaba, porque
+    sale de _destinos_rapidos(). La pantalla simple ya seguia a los conceptos; esta no.
+    """
+    estado = revision.EstadoRevision(
+        congelado=True,
+        botones_guardar=[
+            ("Sierra_Afilada", "GUARDAR SIERRA_AFILADA", False),
+            ("Dientes_rotos", "GUARDAR DIENTES_ROTOS", True),
+        ],
+    )
+
+    pantalla = revision.componer(_imagen(), _imagen(), cfg, estado)
+
+    assert "Sierra_Afilada" in pantalla.botones
+    assert "Dientes_rotos" in pantalla.botones
+    assert "aprobada" not in pantalla.botones
+    assert "rechazada" not in pantalla.botones

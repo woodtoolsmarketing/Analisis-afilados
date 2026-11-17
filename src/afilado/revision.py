@@ -350,9 +350,24 @@ def componer(
     if estado.congelado:
         botones["seguir"] = _dibujar_boton(lienzo, _MARGEN, y1, y2, "OTRA PIEZA", _GRIS)
         x = botones["seguir"][2] + _MARGEN
-        botones["aprobada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR APROBADA", _VERDE)
-        x = botones["aprobada"][2] + _MARGEN
-        botones["rechazada"] = _dibujar_boton(lienzo, x, y1, y2, "GUARDAR RECHAZADA", _ROJO)
+        # LOS DOS BOTONES DE GUARDAR SIGUEN A LOS CONCEPTOS QUE HAY, igual que en la
+        # pantalla simple. Antes estaban clavados en "aprobada" y "rechazada": el bucle
+        # archiva con `elif accion in cfg.clases` (run_live), asi que con los conceptos de
+        # verdad del taller --Sierra_Afilada, Dientes_rotos, Diente_sin_placa,
+        # Sierra_Nueva_TP-- esas dos claves no son ningun concepto y los botones NO HACIAN
+        # NADA: se apretaban, no pasaba nada y la pantalla no decia por que. Un boton que
+        # no hace lo que dice es lo mismo que prometer un veredicto que no se va a dar.
+        # La tecla 'a' y la 'r' nunca tuvieron el problema: salen de _destinos_rapidos(),
+        # que es lo mismo que llega aca en botones_guardar.
+        destinos = estado.botones_guardar or [
+            ("aprobada", "GUARDAR APROBADA", False),
+            ("rechazada", "GUARDAR RECHAZADA", True),
+        ]
+        for clave, etiqueta, es_defecto in destinos[:2]:
+            botones[clave] = _dibujar_boton(
+                lienzo, x, y1, y2, etiqueta, _ROJO if es_defecto else _VERDE
+            )
+            x = botones[clave][2] + _MARGEN
     else:
         botones["revisar"] = _dibujar_boton(
             lienzo, _MARGEN, y1, y2, "REVISAR", (150, 90, 0), 1.0
@@ -842,7 +857,20 @@ def _resultado_de_memoria(juicio: Juicio, cfg: AppConfig) -> tuple[str, str, tup
     operario no tiene como saber que fue un empate.
     """
     if not juicio.decidio:
-        titulo = "SIN MEMORIA" if not juicio.vecinos else "NO ESTOY SEGURO"
+        # TRES CARTELES DISTINTOS PORQUE SON TRES COSAS DISTINTAS, y lo que el operario
+        # tiene que hacer con cada una es distinto:
+        #   SIN MEMORIA   -> no hay fotos guardadas: hay que empezar a archivar
+        #   FALTAN FOTOS  -> la memoria reconoce lo que ve pero ese concepto no llego al
+        #                    minimo de fotos: hay que sacarle una mas a ESE concepto
+        #   NO ESTOY SEGURO -> reconoce dos cosas parejas y no se anima
+        # Antes las dos ultimas salian igual, con el cartel de la duda, y el operario no
+        # tenia como saber que alcanzaba con archivar una foto para destrabarlo.
+        if not juicio.vecinos:
+            titulo = "SIN MEMORIA"
+        elif juicio.falta_fotos:
+            titulo = "FALTAN FOTOS"
+        else:
+            titulo = "NO ESTOY SEGURO"
         return titulo, juicio.motivo or "la memoria no tiene con que comparar", _AMBAR, None
 
     nombre = str(juicio.concepto)
@@ -896,9 +924,21 @@ def detalle_extra(estado: EstadoRevision, cfg: AppConfig) -> Optional[str]:
         return None
     partes = []
     if juicio.confianza is not None:
-        partes.append(
-            f"asi de parejo, la memoria acierta {juicio.confianza * 100:.0f}% de las veces"
-        )
+        # "ASI DE PAREJO" SOLO SI EL NUMERO ES DE DECISIONES ASI DE PAREJAS. Con pocas
+        # fotos la memoria no puede medir una banda alrededor de este margen y lo que
+        # devuelve es su acierto global --ver Autoevaluacion.confianza()-- y entonces el
+        # cartel tiene que decir ESO. Era el mismo numero mal nombrado que hizo que el
+        # 16/11/2026 la pantalla dijera "en decisiones asi de ajustadas acierta 62%" en
+        # todos los dientes, cuando ese 62% era el de casi toda la memoria.
+        if juicio.confianza_por_banda:
+            partes.append(
+                f"asi de parejo, la memoria acierta "
+                f"{juicio.confianza * 100:.0f}% de las veces"
+            )
+        else:
+            partes.append(
+                f"la memoria acierta {juicio.confianza * 100:.0f}% de las veces que decide"
+            )
     elif juicio.fotos_en_memoria:
         partes.append("todavia hay pocas fotos para medir cuanto acierta")
     if juicio.zona:
@@ -1261,6 +1301,44 @@ def componer_simple(
     tope = _boton_a_la_izquierda(
         lienzo, x_salir, y1, y2, "conceptos", "CONCEPTOS", _AZUL, botones, etiquetas
     )
+    # ORDENES: LA UNICA ENTRADA VISIBLE AL HISTORIAL. Cuando se saco "ORDEN DE AFILADO" de
+    # la lista de CONCEPTOS --porque el taller pidio que las ordenes fueran una cosa aparte--
+    # no quedo en esta pantalla ni un boton ni un texto que llevara a las ordenes: la unica
+    # entrada era la tecla 'o', que no esta escrita en ninguna parte. Un operario que no la
+    # sepa no puede cargar ni mirar una orden, y es la pantalla desde donde se contesta un
+    # reclamo. Pide lugar DESPUES de CONCEPTOS y ANTES de OTRO MODELO porque cambiar de foto
+    # de modelo no es un camino unico --la tecla 'm' hace lo mismo y el panel tambien-- y
+    # esto si lo es.
+    #
+    # Y NO ANTES DE CONCEPTOS, aunque ORDENES sea camino unico: CONCEPTOS tambien lo es.
+    # Las teclas rapidas solo alcanzan al primer concepto sano y al primero de defecto
+    # ('a' y 'r'), asi que con los cuatro conceptos que tiene el taller hay dos a los que
+    # SOLO se llega por ese panel. Medido: si ORDENES pidiera lugar primero, en la pantalla
+    # congelada del taller entraria ORDENES (x=1006) y se caeria CONCEPTOS (x=827, hacia
+    # falta x>878). Se cambiaba un camino unico por otro, y de la pantalla congelada se
+    # vuelve a la de en vivo --donde ORDENES entra-- con la barra espaciadora.
+    #
+    # MEDIDO con tipografia.medir en 21 negrita y el ANCHO_LIENZO de verdad (1280 px), con
+    # las dos listas de conceptos (la del config y la de verdad del taller):
+    #
+    #   el boton ORDENES ocupa 140 px: 96 de texto + 2 x 22 de relleno
+    #   la barra va de x=18 a x=1262 y SALIR arranca en x=1158
+    #
+    #   en vivo (REVISAR), con y sin orden abierta: la izquierda termina en x=386;
+    #       entran CONCEPTOS (x=979), ORDENES (x=827) y OTRO MODELO (x=618)
+    #   congelada, conceptos del config (GUARDAR BUENA / GUARDAR MALA): la izquierda
+    #       termina en x=646; entran CONCEPTOS y ORDENES, y NO ENTRA OTRO MODELO
+    #       (x=618, hacia falta x>658). Antes de agregar ORDENES, entraba.
+    #   congelada, conceptos del taller (GUARDAR SIERRA_NUEVA_TP / GUARDAR DIENTES_ROTOS):
+    #       la izquierda termina en x=866 y despues de CONCEPTOS quedan 89 px libres:
+    #       NO ENTRA ORDENES (hacia falta un boton de menos de 89 px, o sea 44 px de texto)
+    #       ni OTRO MODELO.
+    #
+    # O SEA QUE HAY UN CASO EN QUE NO ENTRA, y es el del taller: la pantalla congelada. Por
+    # eso la tecla queda ESCRITA abajo, al lado del titulo SIERRA; mira el renglon de ayuda.
+    tope = _boton_a_la_izquierda(
+        lienzo, tope, y1, y2, "ordenes", "ORDENES", _AZUL, botones, etiquetas
+    )
     # Cambiar de modelo solo tiene sentido si hay mas de uno cargado.
     if estado.posicion_referencia[1] > 1:
         tope = _boton_a_la_izquierda(
@@ -1300,12 +1378,47 @@ def componer_simple(
                 pincel.texto(estado.progreso_automatico,
                              (margen + 2 + ancho_o + 28, 8), _TEXTO_TENUE, 17)
 
-        if "conceptos" not in botones:
-            # El boton no entro en la barra --nombres de concepto largos-- y entonces la
-            # unica forma de llegar al panel es la tecla. Si no se dice en ningun lado,
-            # para el operario el panel no existe.
-            pincel.texto("tecla c: conceptos", (margen + 2, 8 + alto_orden),
-                         _TEXTO_TENUE, 15)
+        # LOS BOTONES QUE NO ENTRARON SE NOMBRAN CON SU TECLA. Si no se dice en ningun
+        # lado, para el operario esa pantalla no existe: _boton_a_la_izquierda no dibuja lo
+        # que no entra, y los nombres de concepto del taller son largos.
+        #
+        # QUE QUEDA ESCRITO EN CADA CASO, medido componiendo esta pantalla con
+        # ANCHO_LIENZO=1280 y las dos listas de conceptos (la del config,
+        # 'aprobada'/'rechazada', y la de verdad del taller, que da los botones GUARDAR
+        # SIERRA_NUEVA_TP y GUARDAR DIENTES_ROTOS):
+        #
+        #   config, en vivo ........................ entran todos, no se escribe nada
+        #   config, congelada, 1 foto de modelo .... entran todos, no se escribe nada
+        #   config, congelada, 4 fotos de modelo ... "teclas:  m modelo"      118 px
+        #   taller, en vivo ........................ entran todos, no se escribe nada
+        #   taller, congelada, 1 foto de modelo .... "teclas:  o ordenes"      115 px
+        #   taller, congelada, 4 fotos de modelo ... "teclas:  o ordenes   m modelo"  196 px
+        #
+        # ESTO ES LO QUE SALVA EL CASO DEL TALLER, donde el boton ORDENES no entra en la
+        # barra: la tecla 'o' queda escrita, que es el unico camino que queda desde la
+        # pantalla congelada sin volver primero a la de en vivo.
+        #
+        # Y EL RENGLON TIENE UN TOPE MEDIDO: arranca en x=20 y el titulo SIERRA --centrado
+        # sobre el recuadro de la imagen-- va de x=290 a x=358, asi que hay 270 px y se
+        # corta en 260 para dejar aire. Los 196 px del caso de arriba entran; los tres
+        # juntos ocuparian 287 y se montarian sobre el titulo. Cuando no entra se cae el
+        # ULTIMO, que es el modelo: es el unico de los tres que no es un camino unico --la
+        # foto de modelo tambien se elige desde el config-- y de los otros dos depende poder
+        # guardar una foto y poder abrir una orden.
+        faltan = [
+            (tecla, nombre)
+            for clave, tecla, nombre in (("conceptos", "c", "conceptos"),
+                                         ("ordenes", "o", "ordenes"),
+                                         ("modelo", "m", "modelo"))
+            if clave not in botones and (clave != "modelo"
+                                         or estado.posicion_referencia[1] > 1)
+        ]
+        while faltan:
+            ayuda = "teclas:  " + "   ".join(f"{t} {n}" for t, n in faltan)
+            if tipografia.medir(ayuda, 15)[0] <= 260 or len(faltan) == 1:
+                pincel.texto(ayuda, (margen + 2, 8 + alto_orden), _TEXTO_TENUE, 15)
+                break
+            faltan.pop()
 
         if referencia is None and not ejemplos:
             for i, linea in enumerate(("No hay fotos de modelo.", "",

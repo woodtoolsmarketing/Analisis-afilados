@@ -15,6 +15,10 @@ taller-- con la camara, la ventana y el teclado de mentira, y se mira que quedo 
 from __future__ import annotations
 
 import argparse
+import os
+import re
+import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -271,7 +275,10 @@ def test_el_informe_sale_con_lo_que_se_archivo(taller: Path, monkeypatch) -> Non
     ordenes.abrir(Orden.nueva("1234", 1, 3))
 
     # Se archiva un diente bueno y uno malo, y despues se pide el informe desde el panel.
-    _correr([_ESPACIO, ord("a"), ord(" "), ord("r"), ord("o"), ord("i"), ord("q")],
+    # La 'o' abre el HISTORIAL y el ENTER entra a la orden en curso --que es la fila que
+    # viene elegida-- recien ahi la 'i' saca el informe.
+    _correr([_ESPACIO, ord("a"), ord(" "), ord("r"),
+             ord("o"), _ENTER, ord("i"), ord("q")],
             monkeypatch)
 
     informe = (taller / "data" / "ordenes" / "informe_1234.txt").read_text(encoding="utf-8")
@@ -281,7 +288,8 @@ def test_el_informe_sale_con_lo_que_se_archivo(taller: Path, monkeypatch) -> Non
 
 
 def test_la_orden_se_carga_a_mano_desde_el_programa(taller: Path, monkeypatch) -> None:
-    teclas = [ord("o")]
+    # La 'o' abre el historial y la 'n' el formulario: la orden nueva se carga desde ahi.
+    teclas = [ord("o"), ord("n")]
     teclas += [ord(c) for c in "77"] + [_ENTER]        # orden
     teclas += [ord(c) for c in "NP9"] + [_ENTER]       # nota de pedido
     teclas += [_ENTER]                                  # cliente vacio
@@ -1039,3 +1047,754 @@ def test_apagados_lo_que_se_archiva_es_el_cuadro_entero(taller: Path, monkeypatc
         f"se archivo un recorte de {guardada.shape[1]}x{guardada.shape[0]} en vez del "
         f"cuadro entero de {entera.shape[1]}x{entera.shape[0]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# La 'o' del taller: por donde se entra a las ordenes
+# ---------------------------------------------------------------------------
+
+
+def test_la_o_del_taller_abre_el_historial_y_no_el_formulario(taller: Path, monkeypatch) -> None:
+    """Sin orden en curso, la 'o' caia derecho en "cargar una orden nueva", asi que las
+    ordenes ya guardadas no existian para el programa: la del reclamo que entra por
+    telefono habia que buscarla con el Explorador. Ahora la 'o' muestra lo que hay, y la
+    orden cerrada de la semana pasada se exporta con una tecla sin reabrirla."""
+    from afilado import panel
+    from afilado.ordenes import Orden, Ordenes
+
+    ordenes = Ordenes(str(taller / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva("99", 1, 4, cliente="Aserradero"))
+    ordenes.cerrar()                       # no queda ninguna abierta, como en el taller hoy
+    assert ordenes.abierta is None
+
+    # Se anota que pantalla se dibujo en cada vuelta: la prueba es que la 'o' lleve al
+    # historial, no que haya quedado un archivo de casualidad.
+    vistos: list[str] = []
+    componer_de_verdad = panel.componer
+
+    def espiar(estado, alto, miniaturas=None):
+        vistos.append(estado.modo)
+        return componer_de_verdad(estado, alto, miniaturas)
+
+    monkeypatch.setattr(panel, "componer", espiar)
+
+    # 'o' abre el historial con la unica orden ya elegida, y la 'e' la exporta.
+    _correr([ord("o"), ord("e"), _ESC, ord("q")], monkeypatch)
+
+    assert panel.MODO_ORDENES in vistos
+    assert panel.MODO_ORDEN not in vistos      # el formulario no se abrio solo
+    zips = list((taller / "data" / "ordenes" / "exportado").glob("*.zip"))
+    assert len(zips) == 1 and "99" in zips[0].name
+    # Y no se creo ninguna orden nueva: la 'e' no fue una letra tecleada en un formulario.
+    assert sorted(p.stem for p in (taller / "data" / "ordenes").glob("*.json")) == ["99"]
+
+
+def test_la_pantalla_del_taller_tiene_un_boton_para_entrar_a_las_ordenes() -> None:
+    """La tecla sola no alcanza: el que no sabe que la 'o' existe no la aprieta nunca.
+
+    QUE SE ROMPIA: la orden de afilado se entraba desde el panel de CONCEPTOS, como si una
+    orden fuera una cosa de los conceptos. Desde la pantalla del taller --la unica que el
+    operario ve todo el dia-- no habia nada que dijera que el programa guarda ordenes, asi
+    que la del reclamo que entra por telefono se buscaba con el Explorador de Windows.
+    """
+    from afilado import revision
+    from afilado.config import AppConfig
+
+    cfg = AppConfig(clases=["afilado", "mal_afilado"], clases_defecto=["mal_afilado"])
+    imagen = np.full((480, 640, 3), 120, np.uint8)
+
+    en_vivo = revision.componer_simple(imagen, imagen, cfg, revision.EstadoRevision(), 672)
+    congelada = revision.componer_simple(
+        imagen, imagen, cfg, revision.EstadoRevision(congelado=True), 672
+    )
+
+    assert "ordenes" in en_vivo.botones
+    # Y tambien con la imagen congelada, que es donde el operario se queda mirando el
+    # veredicto: es ahi donde se acuerda del reclamo de la manana.
+    assert "ordenes" in congelada.botones
+
+
+def test_el_clic_en_el_boton_ORDENES_abre_el_historial(taller: Path, monkeypatch) -> None:
+    """El boton tiene que estar Y tiene que llevar a alguna parte. Un boton dibujado que no
+    hace nada es peor que no tenerlo: la proxima vez el operario no le cree a ninguno.
+
+    El clic entra por el callback de verdad de OpenCV --se encola y se atiende en el cuadro
+    siguiente, igual que en el taller-- y el rectangulo sale de la pantalla que el bucle
+    ACABA de dibujar, no de una composicion aparte: asi el clic cae donde se lo ve.
+    """
+    from afilado import panel
+
+    vistos: list[str] = []
+    componer_panel = panel.componer
+
+    def espiar_panel(estado, alto, miniaturas=None):
+        vistos.append(estado.modo)
+        return componer_panel(estado, alto, miniaturas)
+
+    monkeypatch.setattr(panel, "componer", espiar_panel)
+
+    callback: list = []
+    monkeypatch.setattr(cv2, "setMouseCallback", lambda ventana, cb: callback.append(cb))
+
+    apretado: list = []
+    componer_taller = run_live.revision.componer_simple
+
+    def espiar_taller(vivo, referencia, cfg, estado, alto=None):
+        pantalla = componer_taller(vivo, referencia, cfg, estado, alto)
+        if callback and not apretado and "ordenes" in pantalla.botones:
+            x1, y1, x2, y2 = pantalla.botones["ordenes"]
+            callback[0](cv2.EVENT_LBUTTONDOWN, (x1 + x2) // 2, (y1 + y2) // 2, 0, None)
+            apretado.append(True)
+        return pantalla
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar_taller)
+
+    _correr([255, 255, ord("q")], monkeypatch)
+
+    assert apretado, "el boton ORDENES no estaba en la pantalla del taller"
+    assert panel.MODO_ORDENES in vistos
+    # Y lleva al HISTORIAL, no al formulario de orden nueva: lo que se busca con ese boton
+    # es una orden que ya existe.
+    assert panel.MODO_ORDEN not in vistos
+
+
+def _renglones_escritos(cfg, estado, monkeypatch) -> list[str]:
+    """Todo lo que la pantalla del taller ESCRIBE, preguntandole al pincel.
+
+    Los botones vuelven en Pantalla.botones, pero el renglon de ayuda --el que nombra con
+    su tecla el boton que no entro-- se dibuja derecho con el pincel y no vuelve en ninguna
+    lista. Se le pregunta al pincel, que es el que de verdad lo pone en pantalla, en vez de
+    leer las letras de los pixeles.
+    """
+    from afilado import revision, tipografia
+
+    escritos: list[str] = []
+    original = tipografia.Pincel.texto
+
+    def espiar(self, texto, org, color, tamano, negrita=False):
+        escritos.append(texto)
+        return original(self, texto, org, color, tamano, negrita)
+
+    monkeypatch.setattr(tipografia.Pincel, "texto", espiar)
+    imagen = np.full((480, 640, 3), 120, np.uint8)
+    revision.componer_simple(imagen, imagen, cfg, estado, 672)
+    return escritos
+
+
+def test_el_boton_ORDENES_que_no_entra_queda_nombrado_con_su_tecla(monkeypatch) -> None:
+    """EL CASO DEL TALLER: con los nombres de concepto de verdad --GUARDAR SIERRA_NUEVA_TP
+    y GUARDAR DIENTES_ROTOS-- la barra de abajo se llena y el boton ORDENES NO ENTRA.
+    Medido componiendo esta pantalla: la izquierda termina en x=866, despues de CONCEPTOS
+    quedan 89 px y el boton pide 140.
+
+    QUE SE ROMPIA: el renglon de ayuda decia solo "tecla c: conceptos", asi que en esa
+    pantalla --la congelada, la que el operario mira para decidir si la sierra se tira--
+    las ordenes no existian y no habia como llegar a ellas sin volver primero a la de en
+    vivo. La tecla queda escrita, que es el unico camino que queda.
+    """
+    from afilado import revision
+    from afilado.config import AppConfig
+
+    cfg = AppConfig(clases=["sierra_nueva_tp", "dientes_rotos"],
+                    clases_defecto=["dientes_rotos"])
+    del_taller = [("sierra_nueva_tp", "GUARDAR SIERRA_NUEVA_TP", False),
+                  ("dientes_rotos", "GUARDAR DIENTES_ROTOS", True)]
+    estado = revision.EstadoRevision(congelado=True, botones_guardar=del_taller)
+    # Primero, que de verdad no entro: si entrara, esta prueba no estaria probando nada.
+    imagen = np.full((480, 640, 3), 120, np.uint8)
+    pantalla = revision.componer_simple(imagen, imagen, cfg, estado, 672)
+    assert "ordenes" not in pantalla.botones
+
+    escritos = _renglones_escritos(cfg, estado, monkeypatch)
+
+    ayuda = [texto for texto in escritos if texto.startswith("teclas")]
+    assert ayuda == ["teclas:  o ordenes"]
+
+
+def test_con_la_barra_libre_no_se_nombra_una_tecla_de_un_boton_que_esta(
+    monkeypatch
+) -> None:
+    """La contracara, y la que evita el otro error: nombrar teclas de botones que SI estan
+    llena el renglon de arriba de letras que nadie necesita, y con el renglon lleno el
+    titulo SIERRA queda tapado. Solo se nombra lo que no entro."""
+    from afilado.config import AppConfig
+    from afilado import revision
+
+    cfg = AppConfig(clases=["aprobada", "rechazada"], clases_defecto=["rechazada"])
+
+    escritos = _renglones_escritos(cfg, revision.EstadoRevision(), monkeypatch)
+
+    assert not [texto for texto in escritos if texto.startswith("teclas")]
+
+
+@pytest.mark.parametrize("camara, hasta_completarla", [
+    # ARCHIVAR LA FOTO: el espacio congela, la 'a' la guarda en el primer concepto sano y
+    # anota el diente. La segunda 'a' ya no tiene diente donde anotar y sale el cartel.
+    (_CamaraFalsa, [_ESPACIO, ord("a"), _ESPACIO, ord("a")]),
+    # ANOTAR A MANO: la 'g' no archiva nada, solo llena el informe. Hace falta que la
+    # sierra avance DE VERDAD entre las dos 'g' --por eso la camara que cambia de diente--
+    # o el freno de la foto repetida las junta en un solo diente y la sierra no se completa.
+    (_OtroDiente, [ord("g"), ord("g")]),
+])
+def test_el_cartel_de_la_sierra_completa_nombra_las_teclas_que_pasan_de_sierra(
+    taller: Path, monkeypatch, camara, hasta_completarla
+) -> None:
+    """Los dos caminos por los que se completa una sierra a mano dan este cartel, y los dos
+    lo decian mal. Se prueban los dos: son dos pedazos de codigo distintos y el dia que
+    alguien arregle uno, el otro sigue mintiendo.
+
+    QUE SE ROMPIA: el cartel decia "pase a la siguiente con 'o'", y la 'o' NO pasa de
+    sierra: abre el historial. El operario con la sierra 2 en la mano apretaba 'o', le
+    aparecia una lista de ordenes que no habia pedido, y la sierra siguiente se le anotaba
+    entera encima de la sierra 1 --todos los dientes en la misma columna del informe--
+    hasta que alguien se diera cuenta.
+
+    Aca se lee el cartel y DESPUES se aprietan las teclas que nombra, con el bucle de
+    verdad: si el cartel dijera otra cosa, o si esas teclas hicieran otra cosa, falla. Y se
+    prueban las dos mitades --la 'o' sola y las tres juntas-- porque la primera es la que
+    hace que el cartel viejo fuera mentira y la segunda la que hace que el nuevo sea
+    cierto; de a una no alcanza ninguna.
+    """
+    from afilado.ordenes import Orden, Ordenes
+
+    carteles: list[str] = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.mensaje:
+            carteles.append(estado.mensaje)
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+    monkeypatch.setattr(run_live, "Camara", camara)
+    ordenes = Ordenes(str(taller / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva("7001", 3, 1))
+
+    # PRIMERA VUELTA. Sierras de UN diente: el primer anotado la completa y el siguiente ya
+    # no tiene donde, asi que sale el cartel. Y despues la 'o' SOLA, que es lo que decia el
+    # cartel viejo.
+    _correr(hasta_completarla + [ord("o"), ord("q")], monkeypatch)
+
+    completa = [texto for texto in carteles if "COMPLETA" in texto]
+    assert completa, f"nunca salio el cartel de la sierra completa: {carteles}"
+    # El cartel nombra las TRES teclas, en el orden en que se aprietan.
+    assert "'o', ENTER y 's'" in completa[0]
+    # Y la 'o' sola NO cambio de sierra: por eso el cartel viejo era mentira.
+    assert Ordenes(str(taller / "data" / "ordenes")).abierta.sierra_actual == 1
+
+    # SEGUNDA VUELTA: las tres teclas que el cartel nombra, en ese orden.
+    _correr([ord("o"), _ENTER, ord("s"), ord("q"), ord("q")], monkeypatch)
+
+    assert any("SIERRA 2 de 3" in texto for texto in carteles)
+    assert Ordenes(str(taller / "data" / "ordenes")).abierta.sierra_actual == 2
+
+
+def test_el_cartel_sin_orden_abierta_manda_a_las_teclas_que_de_verdad_sirven(
+    taller: Path, monkeypatch
+) -> None:
+    """QUE SE ROMPIA: el cartel decia "NO HAY ORDEN ABIERTA - abrila con 'o'", y la 'o' no
+    abre ninguna orden: abre el historial, y ahi hay dos caminos --ENTER retoma la elegida,
+    'n' carga una nueva--. El que apretaba 'o' esperando el formulario se encontraba con
+    una lista, y con el historial vacio --el dia que se instala el programa-- con una lista
+    vacia y ninguna pista de que hacer."""
+    from afilado import panel
+    from afilado.ordenes import Ordenes
+
+    carteles: list[str] = []
+    original = run_live.revision.componer_simple
+
+    def espiar(vivo, referencia, cfg, estado, alto=None):
+        if estado.mensaje:
+            carteles.append(estado.mensaje)
+        return original(vivo, referencia, cfg, estado, alto)
+
+    monkeypatch.setattr(run_live.revision, "componer_simple", espiar)
+
+    vistos: list[str] = []
+    componer_panel = panel.componer
+
+    def espiar_panel(estado, alto, miniaturas=None):
+        vistos.append(estado.modo)
+        return componer_panel(estado, alto, miniaturas)
+
+    monkeypatch.setattr(panel, "componer", espiar_panel)
+
+    # La 'g' es anotar el diente a mano, que es lo que se aprieta sin orden abierta.
+    _correr([ord("g"), 255, ord("o"), ord("q")], monkeypatch)
+
+    sin_orden = [texto for texto in carteles if "NO HAY ORDEN ABIERTA" in texto]
+    assert sin_orden, f"nunca salio el cartel de sin orden: {carteles}"
+    # Nombra las dos teclas, y no promete que la 'o' abra una orden.
+    assert "'o'" in sin_orden[0] and "'n'" in sin_orden[0]
+    # Y la 'o' llevo al historial, que es lo que el cartel dice.
+    assert panel.MODO_ORDENES in vistos
+    # Sin tocar nada mas, no se abrio ninguna orden: la 'o' muestra, no crea.
+    assert Ordenes(str(taller / "data" / "ordenes")).abierta is None
+    assert not list((taller / "data" / "ordenes").glob("*.json"))
+
+
+# ---------------------------------------------------------------------------
+# LA FOTO DE PRUEBA DE CADA DIENTE.
+#
+# Esto es lo que contesta un reclamo. Medido en la orden de verdad 5113546 antes
+# de este trabajo: 15 dientes anotados, los 15 con origen "la memoria, anotado
+# solo" y CERO con foto. Un informe que dice "diente 7: RECHAZADO" y no tiene con
+# que mostrarlo es la palabra del taller contra la del cliente.
+#
+# La prueba NO es Diente.foto. `foto` es el nombre pelado de la foto que entro a
+# la coleccion de entrenamiento --sin carpeta, asi que ni el programa la
+# encuentra-- y es lo unico que tienen las ordenes viejas: las 14 que nombran las
+# ordenes 123 y 1234 estan todas en la papelera de la coleccion. `prueba` es la
+# ruta de la foto que respalda el veredicto, en el deposito propio.
+#
+# Se mira EN EL DISCO. Que el .json nombre una foto no prueba que la foto este:
+# eso es exactamente lo que ya paso una vez.
+#
+# COMPROBADO QUE NO PASAN SIN EL ARREGLO. Las siete se corrieron contra una copia
+# del repo con el run_live.py de antes de este trabajo --el del ultimo commit, que
+# no llama a guardar_prueba() en ninguno de los tres caminos-- y la ordenes.py de
+# hoy. Fallaron las siete, cada una donde tenia que fallar:
+#
+#     se anota solo         7 dientes anotados y 0 fotos de prueba en el deposito
+#     boton ANOTAR DIENTE   el diente se anoto a mano y se quedo sin foto de prueba
+#     archivar a mano       la prueba quedo en ''
+#     no cae en la coleccion   el archivo de la prueba no existe
+#     sierra completa       el unico diente de la sierra se anoto sin foto
+#     el disco que falla    la nota no dice que falto la prueba (las dos)
+# ---------------------------------------------------------------------------
+
+
+def _pruebas(base: Path, numero: str = "1234") -> list[Path]:
+    """Las fotos de prueba que quedaron en el deposito de esa orden, por nombre.
+
+    Ordenadas por nombre quedan en orden de diente: el nombre arranca con
+    s<sierra>_d<diente>, asi que d001 va antes que d002.
+    """
+    carpeta = base / "data" / "pruebas" / numero
+    return sorted(carpeta.glob("*.jpg")) if carpeta.is_dir() else []
+
+
+def _donde_quedo(base: Path, diente) -> Path:
+    """La foto de prueba de ese diente, en el disco. Diente.prueba es relativa a data."""
+    return base / "data" / diente.prueba
+
+
+def _anotados(orden) -> list:
+    return [d for d in orden.sierras[0].revisados if d.anotado]
+
+
+class _SierraQuePasa(_CamaraFalsa):
+    """La sierra pasando diente por diente delante del microscopio, sola.
+
+    Apoya un diente 0.40 s y pasa al siguiente, que es lo que hace el operario.
+    Los dos dientes que alterna no son dos semillas cualesquiera: con la firma de
+    automatico.huella(), _diente(0) contra _diente(6) da 0.1226-0.1232 --bien
+    arriba del 0.07 que el programa pide para creer que paso al diente
+    siguiente-- y el mismo diente con el temblor del sensor da 0.0011-0.0015,
+    bien abajo del 0.04 que pide para contarlo en la racha. Con dos semillas
+    consecutivas no alcanzaria: _diente(0) contra _diente(1) da 0.0250 y para el
+    programa serian el mismo diente temblando.
+
+    El tiempo se mira con el reloj y no con los cuadros leidos a proposito: la
+    racha avanza una foto cada interfaz.segundos_entre_fotos, asi que lo que
+    manda es el reloj y no la velocidad a la que esta PC dibuje la ventana.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._arranque = time.monotonic()
+
+    def leer(self):
+        self.leidos += 1
+        cual = 0 if int((time.monotonic() - self._arranque) / 0.40) % 2 == 0 else 6
+        base = _diente(cual)
+        # El temblor del sensor, para que no sean dos fotos identicas: sin esto el
+        # guardado se frenaria solo por duplicada y la prueba no probaria nada.
+        ruido = np.random.default_rng(self.leidos).integers(-2, 3, base.shape, dtype=np.int16)
+        return np.clip(base.astype(np.int16) + ruido, 0, 255).astype(np.uint8)
+
+
+def test_cada_diente_que_se_anota_solo_deja_su_foto_en_el_disco(
+    taller: Path, monkeypatch
+) -> None:
+    """Es el camino que dejo la orden 5113546 con 15 dientes y ninguna foto, y es el
+    que mas usa el taller: el operario pasa la sierra y no toca una tecla, asi que
+    si la foto no se guarda aca no se guarda en ninguna parte."""
+    # MEDIDO con 120 cuadros y una sierra de 8 dientes: anota 6 en tres corridas
+    # seguidas (6, 6, 6) y tarda 2,4 a 2,7 s. Con 200 cuadros anota los 8 y tarda
+    # 4,4 a 5,4 s. Se piden 3 y no 6 porque el que cuenta es el reloj de la PC: lo
+    # que esta prueba cuida es que haya UNA foto por cada diente anotado, cuantos
+    # sean es del caso de arriba.
+    orden = _correr_automatico(
+        taller, monkeypatch, _SierraQuePasa, [255] * 120 + [ord("q")], dientes=8
+    )
+
+    anotados = _anotados(orden)
+    assert len(anotados) >= 3, f"se anotaron {len(anotados)} dientes: no alcanza para probar"
+    fotos = _pruebas(taller)
+    assert len(fotos) == len(anotados), (
+        f"{len(anotados)} dientes anotados y {len(fotos)} fotos de prueba en el deposito"
+    )
+    for diente in anotados:
+        assert diente.prueba, f"el diente {diente.numero} quedo anotado sin foto de prueba"
+        quedo = _donde_quedo(taller, diente)
+        assert quedo.is_file(), f"el diente {diente.numero} nombra una foto que no esta: {quedo}"
+        # Que el archivo este no alcanza: media foto tambien esta. Tiene que abrirse.
+        assert cv2.imread(str(quedo)) is not None, f"la prueba del diente {diente.numero} no se abre"
+    # Y la foto de cada diente lleva SU numero: una prueba pegada al diente de al
+    # lado seria peor que no tenerla.
+    assert [f.name[:8] for f in fotos] == [f"s01_d{d.numero:03d}" for d in anotados]
+
+
+def test_el_boton_de_anotar_diente_tambien_deja_su_foto(taller: Path, monkeypatch) -> None:
+    """La tecla 'g' no archiva nada en la coleccion --no le ensena nada al programa--
+    y justo por eso era la que podia quedarse sin ninguna foto: el diente entraba al
+    informe y no habia con que respaldarlo."""
+    orden = _correr_automatico(taller, monkeypatch, _Quieta, [ord("g"), ord("q")])
+
+    diente = orden.sierras[0].revisados[0]
+    assert "lo anoto el operario" in diente.origen
+    assert diente.prueba, "el diente se anoto a mano y se quedo sin foto de prueba"
+    assert _donde_quedo(taller, diente).is_file()
+    assert len(_pruebas(taller)) == 1
+    # La 'g' sigue sin tocar la coleccion: lo que se guardo es prueba, no entrenamiento.
+    assert _fotos(taller, "aprobada") == []
+
+
+def test_al_archivar_a_mano_quedan_las_dos_fotos_y_no_se_confunden(
+    taller: Path, monkeypatch
+) -> None:
+    """Son dos cosas distintas con dos trabajos distintos: la de la coleccion le
+    ensena al programa y la de prueba contesta el reclamo. Si quedara una sola, o se
+    pierde lo que el programa aprende o se pierde con que mostrar el veredicto."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+
+    _correr([_ESPACIO, ord("a"), ord("q")], monkeypatch)
+
+    diente = _ordenes(taller).abierta.sierras[0].revisados[0]
+    # La de entrenamiento: el nombre pelado, como se guardo siempre.
+    assert diente.foto.endswith(".jpg") and "/" not in diente.foto
+    assert diente.foto in {f.name for f in _fotos(taller, "aprobada")}
+    # Y la de prueba, aparte, con carpeta y todo.
+    assert diente.prueba.startswith("pruebas/"), f"la prueba quedo en {diente.prueba!r}"
+    assert _donde_quedo(taller, diente).is_file()
+    assert Path(diente.prueba).name != diente.foto, "las dos fotos son el mismo archivo"
+
+
+def test_la_foto_de_prueba_no_cae_adentro_de_la_coleccion(taller: Path, monkeypatch) -> None:
+    """Si cayera ahi el programa se arrastraria: archivar() llama a refrescar(), que
+    se mide contra toda la coleccion, y eso va de 209 ms con 15 fotos a 3.153 ms con
+    320. Una orden de 4 sierras de 80 dientes son esas 320 fotos, o sea que el
+    programa quedaria inusable --3,1 s por diente contra 1,2 s de apoyarlo-- antes de
+    terminar la primera orden. Por eso el deposito es propio y refrescar() no lo mira."""
+    orden = _correr_automatico(
+        taller, monkeypatch, _SierraQuePasa, [255] * 120 + [ord("q")], dientes=8
+    )
+
+    anotados = _anotados(orden)
+    assert len(anotados) >= 3
+    coleccion = (taller / "data" / "coleccion").resolve()
+    for diente in anotados:
+        quedo = _donde_quedo(taller, diente).resolve()
+        assert quedo.is_file()
+        assert coleccion not in quedo.parents, f"la prueba entro a la coleccion: {quedo}"
+    # Y la coleccion no engordo ni una foto: por este camino el operario no eligio
+    # ningun concepto, asi que no hay nada que ensenarle al programa.
+    assert list(coleccion.rglob("*.jpg")) == [], "la captura automatica dejo fotos en la coleccion"
+
+
+def test_con_la_sierra_completa_no_queda_ninguna_foto_huerfana(
+    taller: Path, monkeypatch
+) -> None:
+    """Una foto en el deposito que no es la prueba de ningun diente es basura que
+    manana alguien va a mostrar como prueba de algo. Con la sierra completa anotar()
+    devuelve None --no hay diente que respaldar-- asi que no se escribe nada."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 1))
+    monkeypatch.setattr(run_live, "Camara", _OtroDiente)
+
+    _correr([ord("g"), ord("q")], monkeypatch)
+    antes = _pruebas(taller)
+    assert len(antes) == 1, "el unico diente de la sierra se anoto sin foto"
+
+    # La sierra ya esta completa y el operario insiste con la tecla.
+    _correr([ord("g"), ord("g"), ord("q")], monkeypatch)
+
+    assert _pruebas(taller) == antes, "quedo una foto de prueba de un diente que no existe"
+    assert _ordenes(taller).abierta.total_revisados == 1
+
+
+def test_si_la_foto_de_prueba_no_se_puede_escribir_el_diente_se_anota_igual(
+    taller: Path, monkeypatch
+) -> None:
+    """Perder la foto es malo; perder el diente es peor. El diente que no esta en el
+    informe es el diente que nadie reviso, y de ese no hay como defenderse. Asi que el
+    renglon entra igual, con la prueba vacia y la nota que dice que falto: un renglon
+    que dice que no tiene prueba no inventa nada."""
+    from afilado.ordenes import Orden, Ordenes
+
+    Ordenes(str(taller / "data" / "ordenes")).abrir(Orden.nueva("1234", 1, 4))
+    # Una foto de modelo, para que el diente SI tenga veredicto: lo que falla es la
+    # escritura de la prueba y nada mas.
+    modelo = taller / "data" / "referencia" / "microscopio" / "modelo.jpg"
+    modelo.parent.mkdir(parents=True, exist_ok=True)
+    assert cv2.imwrite(str(modelo), _diente(0))
+
+    # El disco que se niega a escribir, en el mismo lugar donde se niega de verdad: el
+    # renombre final de guardar_prueba(). Asi se recorre el camino de error completo
+    # --el log, el borrado del provisorio y el None-- y no una version de mentira.
+    renombrar = os.replace
+
+    def falla_solo_en_las_pruebas(origen, destino, *resto):
+        if "pruebas" in str(destino):
+            raise OSError("el disco dijo basta")
+        return renombrar(origen, destino, *resto)
+
+    monkeypatch.setattr(os, "replace", falla_solo_en_las_pruebas)
+    monkeypatch.setattr(run_live, "Camara", _OtroDiente)
+
+    codigo = _correr([ord("g"), ord("g"), ord("q")], monkeypatch)
+
+    assert codigo == 0, "el programa se cerro con error porque no pudo guardar una foto"
+    orden = _ordenes(taller).abierta
+    assert orden.total_revisados == 2, "se perdieron dientes por una foto que no se pudo escribir"
+    for diente in orden.sierras[0].revisados[:2]:
+        assert diente.prueba == "", f"el diente {diente.numero} nombra una prueba que no se escribio"
+        assert "no se pudo guardar la foto de prueba" in diente.nota
+        assert diente.aprobado is not None, "se perdio tambien el veredicto"
+    assert _pruebas(taller) == [], "quedo una foto a medias en el deposito"
+
+
+def test_cuando_el_disco_falla_la_captura_automatica_sigue_anotando(
+    taller: Path, monkeypatch
+) -> None:
+    """Es el camino en el que el operario no mira la pantalla: tiene las dos manos en
+    la sierra. Si una foto que no se puede escribir frenara la cuenta de dientes, el
+    informe saldria corto y nadie se enteraria hasta el reclamo."""
+    renombrar = os.replace
+
+    def falla_solo_en_las_pruebas(origen, destino, *resto):
+        if "pruebas" in str(destino):
+            raise OSError("el disco dijo basta")
+        return renombrar(origen, destino, *resto)
+
+    monkeypatch.setattr(os, "replace", falla_solo_en_las_pruebas)
+
+    orden = _correr_automatico(
+        taller, monkeypatch, _SierraQuePasa, [255] * 120 + [ord("q")], dientes=8
+    )
+
+    anotados = _anotados(orden)
+    assert len(anotados) >= 3, f"se anotaron {len(anotados)} dientes: la cuenta se freno"
+    for diente in anotados:
+        assert diente.prueba == ""
+        assert diente.nota == "no se pudo guardar la foto de prueba"
+    assert _pruebas(taller) == []
+
+
+# ---------------------------------------------------------------------------
+# BORRAR UNA ORDEN DESDE EL BUCLE: LO QUE LA PANTALLA PROMETE Y LO QUE SE MUEVE
+#
+# Las pruebas del panel miran la pantalla y las de ordenes miran el disco. Aca se miran las
+# dos a la vez y con el programa entero andando: se entra con la 'o', se aprieta 'b' y 's'
+# como en el taller, se lee lo que la pantalla de confirmacion ESCRIBIO en ese cuadro y
+# despues se cuentan los .jpg que llegaron a la papelera.
+#
+# Por que hace falta aca y no alcanza con las de arriba: la promesa la arma el panel, la
+# cuenta la hace ordenes y el que las junta es el manejador de teclas. Las tres estan
+# probadas de a una; lo que rompio en el taller fue el enganche --la pantalla contaba las
+# fotos de una carpeta y el borrado movia otra-- y eso solo se ve corriendo las tres juntas.
+#
+# COMPROBADO QUE LAS DOS FALLAN SIN EL ARREGLO, volviendo el codigo a lo de antes de a una
+# cosa por vez:
+#
+#   la regla vieja --_es_prueba_de() resolviendo la ruta contra data y aceptando cualquier
+#   cosa--                  la pantalla prometia 3 fotos y el movimiento se llevaba 0:
+#                           "assert promete == 0" fallando con "assert 3 == 0"
+#   una pantalla que no promete nunca ninguna foto
+#                           "assert promete == 3" fallando con "assert 0 == 3"
+#   _limpiar_aviso() de antes, "pan.aviso = None" a secas
+#                           el cuadro del reintento se dibujo sin ningun aviso:
+#                           "assert 'A MEDIAS' in ''"
+# ---------------------------------------------------------------------------
+
+
+def _orden_cerrada_con_pruebas(base: Path, numero: str, cuantas: int = 3):
+    """Una orden CERRADA con `cuantas` fotos de prueba de verdad en su deposito.
+
+    Cerrada a proposito: con una orden abierta, la captura automatica le anota dientes y le
+    guarda fotos mientras el bucle anda, y entonces la cuenta de fotos de prueba la estaria
+    moviendo la camara en el medio de la medicion. Asi el unico que toca el deposito es el
+    borrado, que es lo que se esta midiendo.
+    """
+    from afilado.ordenes import Orden, Ordenes
+
+    ordenes = Ordenes(str(base / "data" / "ordenes"))
+    ordenes.abrir(Orden.nueva(numero, 1, 10, cliente="Aserradero del Litoral"))
+    foto = np.full((60, 80, 3), 128, np.uint8)
+    for diente in range(1, cuantas + 1):
+        ruta = ordenes.guardar_prueba(numero, 1, diente, foto)
+        assert ruta, "no se pudo guardar la foto de prueba"
+        ordenes.abierta.anotar(estado="rechazada", aprobado=False,
+                               origen="lo anoto el operario", prueba=ruta)
+    assert ordenes.guardar() is not None
+    ordenes.cerrar()
+    return ordenes
+
+
+def _fotos_prometidas(renglones: list[str]) -> int:
+    """Cuantas fotos dicen esos renglones que se van a llevar. Es lo que el operario lee."""
+    for texto in renglones:
+        cuantas = re.search(r"Se lleva las (\d+) fotos de prueba", texto)
+        if cuantas:
+            return int(cuantas.group(1))
+        if ("No se lleva ninguna foto" in texto
+                or "No tiene ninguna foto de prueba" in texto):
+            return 0
+    raise AssertionError(f"la confirmacion no dice que prueba se lleva: {renglones}")
+
+
+def _borrar_desde_el_bucle(base: Path, monkeypatch) -> tuple[int, int]:
+    """Entra con la 'o', borra la fila elegida con 'b' y 's' y devuelve
+    (las fotos que la pantalla prometio, los .jpg que llegaron a la papelera).
+
+    Los renglones se le piden a la funcion que los dibuja, espiandola: es el texto que se
+    convirtio en pixeles en ese cuadro, no una composicion aparte hecha por la prueba.
+    """
+    from afilado import panel
+
+    renglones: list[str] = []
+    dibujar = panel._dibujar_borrar_orden
+
+    def espiar(lienzo, estado, botones, etiquetas):
+        lineas = dibujar(lienzo, estado, botones, etiquetas)
+        renglones.extend(texto for texto, *_resto in lineas)
+        return lineas
+
+    monkeypatch.setattr(panel, "_dibujar_borrar_orden", espiar)
+
+    papelera = base / "data" / "ordenes" / "_papelera"
+    antes = len(list(papelera.rglob("*.jpg"))) if papelera.is_dir() else 0
+
+    _correr([ord("o"), 255, ord("b"), 255, ord("s"), 255, ord("q")], monkeypatch)
+
+    assert renglones, "la pantalla de confirmacion no se dibujo ni una vez"
+    despues = len(list(papelera.rglob("*.jpg"))) if papelera.is_dir() else 0
+    return _fotos_prometidas(renglones), despues - antes
+
+
+def test_el_borrado_del_bucle_se_lleva_las_fotos_que_la_pantalla_prometio(
+    taller: Path, monkeypatch
+) -> None:
+    """QUE SE ROMPIA EN EL TALLER: con la orden renombrada a mano --"5000 viejo.json", que
+    es lo que queda despues de tocar la carpeta con el Explorador-- la pantalla prometia
+    llevarse las 3 fotos de prueba y el movimiento se llevaba CERO. El que contesta un
+    reclamo aprieta, despues va a _papelera a rescatar las fotos y no hay ninguna: las 3
+    siguen en data/pruebas/5000, donde ya nadie las busca porque la pantalla dijo que se
+    habian ido con la orden.
+
+    Las dos mitades van juntas. La de abajo sola la pasaria una pantalla que no prometiera
+    nunca ninguna foto, y entonces el operario no sabria nunca cuanta prueba esta tirando;
+    la de arriba sola la pasaba el programa viejo.
+    """
+    # EL CAMINO DE TODOS LOS DIAS: el .json se llama como su numero, igual que las 4 ordenes
+    # de verdad del taller. Promete 3 y se lleva 3.
+    _orden_cerrada_con_pruebas(taller, "1234")
+    deposito = taller / "data" / "pruebas" / "1234"
+    assert len(list(deposito.glob("*.jpg"))) == 3
+
+    promete, movidas = _borrar_desde_el_bucle(taller, monkeypatch)
+
+    assert promete == 3
+    assert movidas == promete, f"la pantalla prometio {promete} fotos y se movieron {movidas}"
+    assert not deposito.is_dir()                 # se fue de verdad, no quedo una copia
+    assert not (taller / "data" / "ordenes" / "1234.json").is_file()
+
+    # EL ARCHIVO TOCADO A MANO. Las fotos viven en data/pruebas/5000 y el .json se llama
+    # "5000 viejo": esas fotos no son la prueba de ESTE archivo, asi que no se prometen y no
+    # se mueven. Lo que la pantalla dice de ellas --que el archivo las nombra y no estan en
+    # su carpeta-- es lo unico que se midio.
+    _orden_cerrada_con_pruebas(taller, "5000")
+    ordenes = taller / "data" / "ordenes"
+    (ordenes / "5000.json").rename(ordenes / "5000 viejo.json")
+    quedaron = sorted((taller / "data" / "pruebas" / "5000").glob("*.jpg"))
+    assert len(quedaron) == 3
+
+    promete, movidas = _borrar_desde_el_bucle(taller, monkeypatch)
+
+    assert promete == 0
+    assert movidas == promete, f"la pantalla prometio {promete} fotos y se movieron {movidas}"
+    assert not (ordenes / "5000 viejo.json").is_file()
+    # Y las 3 fotos siguen donde estaban: no se prometieron y no se movieron.
+    assert sorted((taller / "data" / "pruebas" / "5000").glob("*.jpg")) == quedaron
+
+
+def test_el_aviso_del_borrado_a_medias_sigue_dibujado_despues_de_la_b(
+    taller: Path, monkeypatch
+) -> None:
+    """QUE SE ROMPIA: la 'b' del reintento se llevaba el unico renglon que decia en que
+    carpeta de papelera quedo la mitad de la orden. El operario lee "quedo A MEDIAS en
+    _papelera/<fecha y hora>", aprieta 'b' para volver a intentarlo --que es lo que
+    cualquiera hace-- y el renglon desaparece antes de que haya podido anotar el nombre: de
+    ahi en mas tiene que adivinar a cual de las carpetas de papelera entrar, y se llaman
+    todas con la fecha y la hora.
+
+    Se mira EN LOS CUADROS QUE EL BUCLE DIBUJO, uno por uno, y no en el estado al final: lo
+    que importa es que el renglon haya estado en la pantalla mientras el operario la tenia
+    delante. El movimiento se traba como se traba en el taller --una foto abierta en el
+    visor de Windows-- y shutil.move, que cuando no puede renombrar la carpeta copia archivo
+    por archivo, deja una foto del otro lado y se planta en la siguiente.
+    """
+    from afilado import panel
+
+    _orden_cerrada_con_pruebas(taller, "1234")
+    mover = shutil.move
+
+    def copia_a_medias(origen, destino):
+        fuente = Path(origen)
+        if fuente.is_dir():
+            Path(destino).mkdir(parents=True, exist_ok=True)
+            primera = sorted(fuente.iterdir())[0]
+            shutil.copy2(primera, Path(destino) / primera.name)
+            raise OSError(13, "Permission denied")
+        return mover(origen, destino)
+
+    monkeypatch.setattr(shutil, "move", copia_a_medias)
+
+    vistos: list[tuple[str, Optional[str]]] = []
+    componer = panel.componer
+
+    def espiar(estado, alto, miniaturas=None):
+        vistos.append((estado.modo, estado.aviso))
+        return componer(estado, alto, miniaturas)
+
+    monkeypatch.setattr(panel, "componer", espiar)
+
+    # o = entrar a las ordenes, b = borrar, s = si, y la 'b' DEL REINTENTO.
+    _correr([ord("o"), 255, ord("b"), 255, ord("s"), 255, ord("b"), 255, ord("q")],
+            monkeypatch)
+
+    confirmaciones = [aviso for modo, aviso in vistos
+                      if modo == panel.MODO_BORRAR_ORDEN]
+    assert len(confirmaciones) >= 2, (
+        f"la confirmacion se dibujo {len(confirmaciones)} vez/veces: no hubo reintento"
+    )
+    # La primera vez no habia nada que avisar; la del reintento tiene que decir donde quedo
+    # la mitad de la orden.
+    assert confirmaciones[0] is None
+    del_reintento = confirmaciones[-1] or ""
+    assert "A MEDIAS" in del_reintento, del_reintento
+    assert "1234.json" in del_reintento and "pruebas/1234" in del_reintento
+    # LA CARPETA QUE NOMBRA EXISTE Y TIENE ALGO ADENTRO. Mandar a mirar una carpeta vacia
+    # --o inventada-- seria hacerle perder el viaje al que va con el Explorador.
+    nombrada = re.search(r"_papelera/(\S+):", del_reintento)
+    assert nombrada, del_reintento
+    quedo = taller / "data" / "ordenes" / "_papelera" / nombrada.group(1)
+    assert quedo.is_dir() and list(quedo.rglob("*.jpg"))
+    # Y la orden sigue entera en el disco: el .json es lo ultimo que se mueve, asi que un
+    # borrado trabado no la saca del historial. Es lo que hace que el reintento tenga
+    # sentido.
+    assert (taller / "data" / "ordenes" / "1234.json").is_file()

@@ -186,6 +186,16 @@ class Juicio:
     puntajes: dict[str, float] = field(default_factory=dict)
     zona: Optional[str] = None              # donde mas se diferencia del mejor vecino
     fotos_en_memoria: int = 0
+    # EL CONCEPTO AL QUE SE PARECE Y QUE NO PUEDE SER VEREDICTO porque no llego al minimo
+    # de fotos. Es otra cosa que no animarse: la memoria SI reconoce lo que ve, lo que no
+    # puede es nombrarlo. El cartel lo dice distinto --FALTAN FOTOS, no NO ESTOY SEGURO--
+    # porque lo que el operario tiene que hacer es distinto: sacar una foto mas.
+    falta_fotos: Optional[str] = None
+    # Si `confianza` es el acierto en decisiones ASI DE AJUSTADAS (True) o el acierto sobre
+    # todas las veces que decidio (False). Con pocas fotos no hay banda que medir --ver
+    # Autoevaluacion.confianza()-- y el cartel no puede decir "asi de parejo" de un numero
+    # que no mide eso.
+    confianza_por_banda: bool = False
 
     @property
     def decidio(self) -> bool:
@@ -203,10 +213,34 @@ class Autoevaluacion:
     casos: list[tuple[float, bool]] = field(default_factory=list)
     medidas_de: int = 0   # cuantas fotos habia cuando se midio
     recortada: bool = False  # True si se midio sobre las mas nuevas, no sobre todas
+    # Con que minimo_por_concepto se midio. Sirve para tirar la medicion guardada cuando
+    # la regla cambio: una autoevaluacion vieja contestaria por una regla que ya no corre.
+    minimo: int = 0
+    # Fotos sobre las que el programa NO iba a decidir, porque lo que mas se les parece es
+    # un concepto al que le faltan fotos. No son aciertos ni errores: no hubo decision.
+    sin_decidir: int = 0
 
     @property
     def acierto(self) -> Optional[float]:
         return self.aciertos / self.total if self.total else None
+
+    def ventana(self, minimo_casos: int = 8) -> int:
+        """Cuantos casos entran en "decisiones asi de ajustadas": el 25% mas cercano, con
+        piso de `minimo_casos` para que el porcentaje no salga de dos o tres casos."""
+        return max(minimo_casos, round(len(self.casos) * 0.25))
+
+    def mide_por_banda(self, minimo_casos: int = 8) -> bool:
+        """Si la ventana es de verdad una banda alrededor de este margen, o es la memoria.
+
+        UNA VENTANA DE MAS DE LA MITAD DE LOS CASOS NO ES UNA BANDA. Con pocas fotos manda
+        el piso de `minimo_casos` y la ventana se come casi todo: con 15 casos son 8, o sea
+        el 53%, y los margenes que entran van de 1,8 a 17,9 puntos. Llamar a eso
+        "decisiones asi de ajustadas" es ponerle a un numero un nombre que no le
+        corresponde. La mitad no es un numero elegido: es donde la ventana deja de poder
+        distinguir una decision de la contraria, porque dos margenes opuestos comparten la
+        mayoria de los casos.
+        """
+        return self.ventana(minimo_casos) * 2 <= len(self.casos)
 
     def confianza(self, margen: float, minimo_casos: int = 8) -> Optional[float]:
         """Que tan seguido acerto la memoria cuando estuvo IGUAL DE AJUSTADA que ahora.
@@ -226,12 +260,29 @@ class Autoevaluacion:
         SEGURO - esta muy parejo", y dos empates de 31 y 21 puntos salian APROBADO sin una
         palabra de duda.
 
-        None si no hay casos suficientes para que el numero signifique algo.
+        PERO CON POCAS FOTOS NO HAY BANDA QUE MEDIR, Y FINGIRLA FRENA TODO. Con 15 casos la
+        ventana queda clavada en el piso de 8, o sea el 53% de la memoria, y los margenes
+        que entran van de 1,8 a 17,9 puntos: eso no es "decisiones asi de ajustadas", es el
+        acierto de casi toda la memoria con otro nombre. Y como adentro caen los 3 errores
+        que tiene la coleccion, da 62% para CUALQUIER margen por debajo de 11 puntos.
+        MEDIDO el 16/11/2026 con la coleccion del taller --15 fotos, 4 conceptos--: la
+        curva daba 62% a 0, 2, 5, 6.8 y 10 puntos, y recien a los 11 pasaba el minimo de
+        70%. Por eso el programa dijo "NO ESTOY SEGURO" en todos los dientes del dia: no
+        dudaba de ese diente, dudaba de todos, y el numero que mostraba no media lo que el
+        cartel decia que media.
+        Mientras la ventana no sea una banda de verdad --ver mide_por_banda()-- se devuelve
+        el acierto GLOBAL, que es el unico que esas fotos pueden sostener, y quien escribe
+        el cartel pregunta mide_por_banda() para decir de cual de los dos numeros habla.
+
+        None si no hay casos suficientes para que ningun numero signifique algo.
         """
         if len(self.casos) < minimo_casos:
             return None
-        ventana = max(minimo_casos, round(len(self.casos) * 0.25))
-        cercanos = sorted(self.casos, key=lambda caso: abs(caso[0] - margen))[:ventana]
+        if not self.mide_por_banda(minimo_casos):
+            return sum(1 for _, acerto in self.casos if acerto) / len(self.casos)
+        cercanos = sorted(
+            self.casos, key=lambda caso: abs(caso[0] - margen)
+        )[:self.ventana(minimo_casos)]
         return sum(1 for _, acerto in cercanos if acerto) / len(cercanos)
 
 
@@ -392,11 +443,17 @@ class Memoria:
         candidatas_por_concepto: int = 6,
         vecinos_por_concepto: int = 3,
         maximo_autoevaluacion: int = 120,
+        minimo_por_concepto: int = 3,
     ) -> None:
         self._base = ruta_absoluta(directorio)
         self._candidatas = max(1, int(candidatas_por_concepto))
         self._vecinos = max(1, int(vecinos_por_concepto))
         self._tope_auto = max(0, int(maximo_autoevaluacion))
+        # CUANTAS FOTOS NECESITA UN CONCEPTO PARA PODER SER UN VEREDICTO. Vive aca y no
+        # solo en juzgar() porque la autoevaluacion tiene que medir CON LA MISMA REGLA con
+        # la que se decide: si un concepto no puede ser nombrado, sus fotos no miden
+        # decisiones que el programa vaya a tomar.
+        self._minimo_por_concepto = max(1, int(minimo_por_concepto))
 
         self._claves: list[str] = []        # archivo|mtime|tamano, para saber que cambio
         self._archivos: list[str] = []
@@ -433,6 +490,25 @@ class Memoria:
         """
         conteo = self.conteo_por_concepto()
         return sum(1 for n in conteo.values() if n >= max(1, minimo_por_concepto)) >= 2
+
+    def conceptos_que_deciden(self, minimo_por_concepto: Optional[int] = None) -> set[str]:
+        """Los conceptos que llegaron al minimo de fotos: los unicos que pueden ser un
+        veredicto.
+
+        POR QUE HACIA FALTA SEPARARLO. El programa ya exigia este minimo para animarse a
+        juzgar, pero despues dejaba competir a todos: un concepto de 2 fotos podia ganar la
+        votacion y ser el veredicto, y sus fotos entraban en la autoevaluacion que decide
+        si confiar en el veredicto. O sea que el mismo numero servia para declarar un
+        concepto "todavia no esta listo" y para dejarlo decidir.
+        MEDIDO el 16/11/2026 con la coleccion del taller: Diente_sin_placa tenia 2 fotos de
+        las 3 que hacen falta y acertaba 0 de 2 --las dos las llamaba Dientes_rotos-- y
+        esos dos errores caian en la ventana de la confianza y la dejaban en 62%, abajo del
+        minimo de 70%. Con eso el programa no se animaba con NINGUN diente.
+        """
+        minimo = self._minimo_por_concepto if minimo_por_concepto is None else max(
+            1, int(minimo_por_concepto)
+        )
+        return {c for c, n in self.conteo_por_concepto().items() if n >= minimo}
     # ------------------------------------------------------------------ carga
 
     def sincronizar(self, mapa: dict[str, list[Path]], guardar: bool = True) -> tuple[int, int]:
@@ -545,8 +621,14 @@ class Memoria:
         juicio.parecido = vecinos[0].parecido
 
         ordenados = sorted(puntajes.items(), key=lambda kv: kv[1], reverse=True)
-        mejor, valor = ordenados[0]
-        segundo = ordenados[1][1] if len(ordenados) > 1 else 0.0
+        # SOLO DECIDEN LOS CONCEPTOS QUE LLEGARON AL MINIMO DE FOTOS, y el margen se mide
+        # entre ellos: un concepto al que le faltan fotos no puede ser el veredicto, asi
+        # que tampoco puede achicar el margen de los que si pueden. Ver
+        # conceptos_que_deciden() para lo que esto costaba medido.
+        deciden = self.conceptos_que_deciden(minimo_por_concepto)
+        candidatos = [(c, v) for c, v in ordenados if c in deciden]
+        mejor, valor = candidatos[0] if candidatos else ordenados[0]
+        segundo = candidatos[1][1] if len(candidatos) > 1 else 0.0
         juicio.margen = float(valor - segundo)
 
         if juicio.parecido < float(parecido_minimo):
@@ -556,14 +638,51 @@ class Memoria:
             )
             return juicio
 
-        auto = self.autoevaluacion()
-        juicio.confianza = auto.confianza(juicio.margen)
-        if juicio.confianza is not None and juicio.confianza < float(confianza_minima):
+        # EL QUE MAS SE PARECE ES UN CONCEPTO AL QUE LE FALTAN FOTOS. Ni se nombra --no
+        # llego al minimo-- ni se nombra al segundo en su lugar, que seria contestar otra
+        # cosa que la que se vio. Se dice a que se parece y cuanto le falta, que es lo
+        # unico que el operario puede arreglar: sacarle la foto que falta.
+        if ordenados[0][0] not in deciden:
+            minimo = max(1, int(minimo_por_concepto))
+            tiene = self.conteo_por_concepto().get(ordenados[0][0], 0)
+            juicio.falta_fotos = ordenados[0][0]
             juicio.motivo = (
-                f"{mejor} y {ordenados[1][0]} quedaron a {juicio.margen * 100:.1f} puntos, "
-                f"y en decisiones asi de ajustadas la memoria acierta "
-                f"{juicio.confianza * 100:.0f}% de las veces"
+                f"se parece a {ordenados[0][0]}, que tiene {tiene} de las {minimo} fotos "
+                f"que hacen falta para decidir: sacale una mas y archivala ahi"
             )
+            return juicio
+        if len(candidatos) < 2:
+            juicio.motivo = (
+                f"el unico concepto con {max(1, int(minimo_por_concepto))} fotos es "
+                f"{mejor}: sin otro contra que comparar no hay veredicto"
+            )
+            return juicio
+
+        auto = self.autoevaluacion(minimo_por_concepto)
+        juicio.confianza = auto.confianza(juicio.margen)
+        juicio.confianza_por_banda = auto.mide_por_banda()
+        if juicio.confianza is not None and juicio.confianza < float(confianza_minima):
+            if juicio.confianza_por_banda:
+                juicio.motivo = (
+                    f"{mejor} y {candidatos[1][0]} quedaron a "
+                    f"{juicio.margen * 100:.1f} puntos, y en decisiones asi de ajustadas "
+                    f"la memoria acierta {juicio.confianza * 100:.0f}% de las veces"
+                )
+            else:
+                # SIN CASOS PARA UNA BANDA, EL CARTEL NO PUEDE DECIR "decisiones asi de
+                # ajustadas": ese numero no se midio. Lo que se midio es el acierto sobre
+                # todas sus fotos, y asi se dice. Ver Autoevaluacion.confianza().
+                # "de las veces que decidio" y NO "sobre sus propias fotos": auto.total
+                # cuenta DECISIONES, y hay fotos sobre las que el programa no decide
+                # --las de un concepto al que le faltan fotos--. Decir "fotos" aca era
+                # ponerle a este numero el mismo tipo de nombre equivocado que el cartel
+                # de "decisiones asi de ajustadas" que ya costo una jornada.
+                juicio.motivo = (
+                    f"acierta {auto.aciertos} de las {auto.total} veces que decidio, y son "
+                    f"muy pocas para medir aparte una decision tan ajustada como esta "
+                    f"({mejor} contra {candidatos[1][0]}, "
+                    f"{juicio.margen * 100:.1f} puntos)"
+                )
             return juicio
 
         juicio.concepto = mejor
@@ -673,13 +792,37 @@ class Memoria:
         return vecinos, puntajes
 
     # ------------------------------------------------------------------ medirse
-    def autoevaluacion(self) -> Autoevaluacion:
-        """Esconde cada foto y le pregunta a las demas. Se calcula una vez y se guarda."""
-        if self._auto is not None:
+    def autoevaluacion(self, minimo_por_concepto: Optional[int] = None) -> Autoevaluacion:
+        """Esconde cada foto y le pregunta a las demas. Se calcula una vez y se guarda.
+
+        SE MIDE CON LA MISMA REGLA CON LA QUE SE DECIDE, que es todo el punto de este
+        numero: si juzgar() no puede nombrar un concepto que no llego al minimo de fotos,
+        aca tampoco, y una foto sobre la que el programa NO iba a decidir no se cuenta ni
+        como acierto ni como error --se cuenta en sin_decidir, que es lo que es--.
+        Pero una foto de un concepto que no puede ser veredicto Y que el programa igual va
+        a contestar con otro nombre SI se cuenta, y como error: esos dientes van a llegar
+        al microscopio y el programa les va a poner un nombre equivocado. Saltearlas seria
+        sacarse de encima justo los casos que bajan el numero.
+        MEDIDO el 16/11/2026 con la coleccion del taller: de las 15 fotos, el programa
+        decide sobre 13 y acierta 10, o sea 77%. Las 2 que no decide son las de
+        Sierra_Nueva_TP, que tiene 2 fotos de las 3 que hacen falta. De los 3 errores, 2
+        son de Diente_sin_placa llamado Dientes_rotos --los dos son defecto, asi que el
+        diente se rechaza igual-- y 1 es Sierra_Afilada llamado Dientes_rotos a 1,8 puntos,
+        que es el unico que cruza la linea de aprobado a rechazado: 12 de 13 decisiones
+        quedan del lado correcto de esa linea.
+        """
+        minimo = self._minimo_por_concepto if minimo_por_concepto is None else max(
+            1, int(minimo_por_concepto)
+        )
+        # LA MEDICION GUARDADA SE TIRA SI SE MIDIO CON OTRA REGLA. Sin esto, el .npz del
+        # taller devolveria la autoevaluacion vieja --medida cuando los conceptos flacos
+        # votaban-- y el programa seguiria frenado hasta que alguien archive una foto.
+        if self._auto is not None and self._auto.minimo == minimo:
             return self._auto
 
         total = self.cantidad
-        auto = Autoevaluacion(medidas_de=total)
+        auto = Autoevaluacion(medidas_de=total, minimo=minimo)
+        deciden = self.conceptos_que_deciden(minimo)
         if total < 2:
             self._auto = auto
             return auto
@@ -706,8 +849,16 @@ class Memoria:
             if len(puntajes) < 2:
                 continue
             ordenados = sorted(puntajes.items(), key=lambda kv: kv[1], reverse=True)
-            predicho = ordenados[0][0]
-            margen = float(ordenados[0][1] - ordenados[1][1])
+            if ordenados[0][0] not in deciden:
+                # Sobre esta foto el programa no iba a decidir: iba a decir a que se parece
+                # y que le faltan fotos. No hay decision que medir.
+                auto.sin_decidir += 1
+                continue
+            candidatos = [(c, v) for c, v in ordenados if c in deciden]
+            if len(candidatos) < 2:
+                continue
+            predicho = candidatos[0][0]
+            margen = float(candidatos[0][1] - candidatos[1][1])
             verdadero = self._conceptos[i]
             acerto = predicho == verdadero
             auto.total += 1
@@ -732,10 +883,16 @@ class Memoria:
         # EL ACIERTO VA ADELANTE. Con muchos conceptos la linea no entra en el ancho de la
         # pantalla, y lo que se perdia al cortarse por el borde era justamente el numero
         # que importa; la enumeracion de conceptos tambien esta en el panel, fila por fila.
-        sobre = " de las ultimas" if auto.recortada else " de"
+        # SE CUENTAN DECISIONES, NO FOTOS, y por eso no dice "de N fotos guardadas". Desde
+        # que un concepto al que le faltan fotos no puede ser veredicto, hay fotos sobre
+        # las que el programa no decide --dice que faltan fotos-- y no entran en la cuenta:
+        # con la coleccion del taller del 16/11, 13 decisiones sobre 15 fotos. Poner "10 de
+        # 13 fotos que tiene guardadas" al lado de "15 en total" eran dos numeros de fotos
+        # distintos en el mismo renglon, y ninguno de los dos era el que se midio.
+        sobre = " de las ultimas" if auto.recortada else " de las"
         return (
-            f"memoria: acierta {auto.aciertos}{sobre} {auto.total} fotos que tiene "
-            f"guardadas  -  {self.cantidad} en total ({partes})"
+            f"memoria: acierta {auto.aciertos}{sobre} {auto.total} veces que decidio  -  "
+            f"{self.cantidad} fotos ({partes})"
         )
 
     # ------------------------------------------------------------------ disco
@@ -845,6 +1002,8 @@ def _auto_a_json(auto: Optional[Autoevaluacion]) -> str:
             "casos": [[round(m, 6), bool(a)] for m, a in auto.casos],
             "medidas_de": auto.medidas_de,
             "recortada": auto.recortada,
+            "minimo": auto.minimo,
+            "sin_decidir": auto.sin_decidir,
         }
     )
 
@@ -861,6 +1020,12 @@ def _auto_desde_json(crudo: str) -> Optional[Autoevaluacion]:
             casos=[(float(m), bool(a)) for m, a in datos["casos"]],
             medidas_de=int(datos.get("medidas_de", 0)),
             recortada=bool(datos.get("recortada", False)),
+            # SIN "minimo" ES UNA MEDICION DE ANTES DE LA REGLA, y el 0 no coincide con
+            # ningun minimo posible --el minimo es siempre 1 o mas-- asi que autoevaluacion()
+            # la tira y vuelve a medir una vez. Es justo lo que hay que hacer: ese numero
+            # se midio dejando votar a conceptos que hoy no pueden ser veredicto.
+            minimo=int(datos.get("minimo", 0)),
+            sin_decidir=int(datos.get("sin_decidir", 0)),
         )
     except (ValueError, KeyError, TypeError):
         return None

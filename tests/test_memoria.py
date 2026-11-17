@@ -581,3 +581,129 @@ def test_una_cache_cortada_a_la_mitad_no_deja_al_programa_sin_arrancar(
     otra = _memoria(tmp_path)
 
     assert otra.sincronizar(mapa) == (4, 0)
+
+
+# ---------------------------------------------------------------------------
+# Quien puede ser un veredicto, y con que regla se mide la confianza
+#
+# EL DIA QUE ESTO SALIO MAL: 16/11/2026. El programa dijo "NO ESTOY SEGURO" en TODOS los
+# dientes de la jornada. La coleccion tenia 15 fotos en 4 conceptos, y dos de esos
+# conceptos tenian 2 fotos de las 3 que el propio programa exige para animarse a decidir.
+# Esos conceptos flacos competian igual: podian ganar la votacion, y sus fotos entraban en
+# la autoevaluacion que decide si confiar en el veredicto. Diente_sin_placa, con 2 fotos,
+# acertaba 0 de 2, y esos dos errores dejaban la confianza en 62% --abajo del minimo de
+# 70%-- para CUALQUIER margen por debajo de 11 puntos.
+# ---------------------------------------------------------------------------
+
+
+def _mancha(semilla: int = 0, lado: int = 240) -> np.ndarray:
+    """Una tercera familia, bien distinta de las otras dos: un circulo claro al medio."""
+    img = np.full((lado, lado, 3), 30, np.uint8)
+    cv2.circle(img, (lado // 2, lado // 2), 70 + semilla * 6, (220, 220, 220), -1)
+    cv2.circle(img, (lado // 2, lado // 2), 30, (60, 60, 60), -1)
+    return cv2.GaussianBlur(img, (7, 7), 0)
+
+
+def test_un_concepto_al_que_le_faltan_fotos_no_puede_ser_el_veredicto(
+    tmp_path: Path,
+) -> None:
+    """Y TAMPOCO SE CONTESTA OTRA COSA EN SU LUGAR: se dice a que se parece y que falta.
+
+    El programa ya exigia 3 fotos por concepto para animarse a juzgar, pero despues dejaba
+    competir a uno de 2: podia ganar y ser el veredicto. O sea que el mismo numero servia
+    para declarar un concepto "todavia no esta listo" y para dejarlo decidir.
+    Contestar con el segundo seria peor todavia: el operario veria el nombre de otra cosa.
+    """
+    mapa = _taller(tmp_path, buenas=4, malas=4)
+    base = tmp_path / "coleccion"
+    mapa["nueva"] = [_guardar(base / "nueva", f"n{i}.jpg", _mancha(i)) for i in range(2)]
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+
+    juicio = mem.juzgar(_mancha(5), minimo_por_concepto=3)
+
+    assert juicio.concepto is None, "nombro un concepto de 2 fotos"
+    assert juicio.falta_fotos == "nueva"
+    # El cartel tiene que decir cuantas tiene y cuantas hacen falta: es lo unico que el
+    # operario puede arreglar, y se arregla sacando una foto.
+    assert "2 de las 3" in str(juicio.motivo)
+    assert "nueva" in str(juicio.motivo)
+
+
+def test_la_autoevaluacion_mide_con_la_misma_regla_con_la_que_se_decide(
+    tmp_path: Path,
+) -> None:
+    """SI UN CONCEPTO NO PUEDE SER VEREDICTO, SUS FOTOS NO MIDEN DECISIONES QUE EL PROGRAMA
+    VAYA A TOMAR.
+
+    Es lo que dejaba la confianza en 62% el 16/11: las 2 fotos de un concepto de 2 fotos
+    entraban como errores de decisiones que, con la regla puesta, el programa ni siquiera
+    toma --dice que faltan fotos--. Lo que NO se puede hacer es saltear todo lo del
+    concepto flaco: una foto suya sobre la que el programa SI contesta otro nombre es un
+    error de verdad y se cuenta, porque ese diente va a llegar al microscopio igual.
+    """
+    mapa = _taller(tmp_path, buenas=4, malas=4)
+    base = tmp_path / "coleccion"
+    mapa["nueva"] = [_guardar(base / "nueva", f"n{i}.jpg", _mancha(i)) for i in range(2)]
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+
+    auto = mem.autoevaluacion(minimo_por_concepto=3)
+
+    # Ningun caso medido puede tener como respuesta correcta un concepto que no puede ser
+    # veredicto: de esos, o el programa no decide, o decide mal y cuenta como error.
+    assert "nueva" not in auto.por_concepto
+    # Y las que no se midieron no desaparecen: quedan contadas como lo que son.
+    assert auto.sin_decidir >= 1
+    assert auto.total + auto.sin_decidir <= mem.cantidad
+    # La regla con la que se midio queda escrita, para poder tirar la medicion si cambia.
+    assert auto.minimo == 3
+
+
+def test_una_medicion_hecha_con_otra_regla_no_se_reusa(tmp_path: Path) -> None:
+    """La autoevaluacion se guarda en el .npz y vuelve a cargarse al abrir el programa.
+
+    Sin esto, el taller abriria el programa con la medicion vieja --hecha cuando los
+    conceptos flacos votaban-- y seguiria frenado hasta que alguien archive una foto nueva.
+    """
+    mapa = _taller(tmp_path, buenas=4, malas=4)
+    base = tmp_path / "coleccion"
+    mapa["nueva"] = [_guardar(base / "nueva", f"n{i}.jpg", _mancha(i)) for i in range(2)]
+    mem = _memoria(tmp_path)
+    mem.sincronizar(mapa)
+
+    con_tres = mem.autoevaluacion(minimo_por_concepto=3)
+    con_uno = mem.autoevaluacion(minimo_por_concepto=1)
+
+    assert con_tres.minimo == 3 and con_uno.minimo == 1
+    # Con minimo 1 vuelve a entrar el concepto flaco: es otra medicion, no la guardada.
+    assert "nueva" in con_uno.por_concepto
+    assert con_uno.sin_decidir == 0
+
+
+def test_con_pocas_fotos_la_confianza_dice_el_acierto_global_y_no_finge_una_banda() -> None:
+    """EL NUMERO QUE FRENO EL TALLER ENTERO.
+
+    La ventana de "decisiones asi de ajustadas" es el 25% de los casos con piso de 8. Con
+    15 casos el piso manda y la ventana son 8, el 53% de la memoria: los margenes que
+    entran van de 1,8 a 17,9 puntos. Eso no es una banda alrededor de este margen, es casi
+    toda la memoria con otro nombre, y daba el MISMO 62% para cualquier margen por debajo
+    de 11 puntos. El programa no dudaba de ese diente: dudaba de todos.
+    """
+    # 15 casos: 12 bien, 3 mal, con los errores en margenes chicos --como la coleccion de
+    # verdad del taller el 16/11--.
+    casos = [(0.018, False), (0.038, True), (0.046, True), (0.163, False),
+             (0.181, False), (0.189, True), (0.239, True), (0.245, True),
+             (0.251, True), (0.268, True), (0.281, True), (0.317, True),
+             (0.332, True), (0.350, True), (0.360, True)]
+    auto = M.Autoevaluacion(total=15, aciertos=12, casos=casos)
+
+    assert auto.mide_por_banda() is False
+    # Todos los margenes dan lo mismo, porque es el acierto global: no hay banda.
+    assert auto.confianza(0.0) == pytest.approx(12 / 15)
+    assert auto.confianza(0.30) == pytest.approx(12 / 15)
+
+    # Con 16 casos la ventana de 8 ya es la mitad justa y vuelve a ser una banda.
+    con_mas = M.Autoevaluacion(total=16, aciertos=13, casos=casos + [(0.37, True)])
+    assert con_mas.mide_por_banda() is True
+    assert con_mas.confianza(0.0) != con_mas.confianza(0.30)

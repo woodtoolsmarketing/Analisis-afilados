@@ -299,6 +299,41 @@ _ETIQUETAS_AMIGAS = {"aprobada": "GUARDAR BUENA", "rechazada": "GUARDAR MALA"}
 _TECLAS_DIGITO = {ord(str(numero)): numero for numero in range(1, 10)}
 
 
+def _cuanto_pesa(archivo: Path) -> str:
+    """Lo que ocupa un archivo, para decirlo en el cartel de la pantalla.
+
+    En KiB hasta el mega y en MiB de ahi para arriba, con una coma de decimal: lo que el
+    operario necesita saber es si lo que acaba de escribir son dos mil bytes o treinta
+    megas, no el byte exacto. Son las mismas unidades con las que esta escrito el resto del
+    programa --el Explorador de Windows muestra lo mismo-- asi que los numeros se pueden
+    comparar con lo que se ve en la carpeta.
+
+    MEDIDO exportando las 4 ordenes de verdad del taller (copiadas al costado: en
+    Desktop/Afilado no se escribio nada) y el caso gordo armado con una foto de verdad del
+    microscopio de 88.051 bytes:
+
+        213132  (0 de 96 dientes)      2.706 bytes ->  "2,6 KiB"
+        123     (7 de 80)              2.913 bytes ->  "2,8 KiB"
+        1234    (7 de 80)              2.918 bytes ->  "2,8 KiB"
+        5113546 (15 de 80)             3.275 bytes ->  "3,2 KiB"
+        4 sierras de 80 con 320 pruebas   28.178.007 bytes -> "26,9 MiB"   (847 ms)
+        la misma, sin las fotos en el disco     7.153 bytes ->  "7,0 KiB"  (7 ms)
+
+    O sea: lo que pesa es la prueba, y entre el zip mas liviano y el mas pesado hay diez mil
+    veces. Diez 'e' de la orden gorda en un dia son 269 MiB que nadie borra.
+
+    Si el archivo no se puede medir se dice que no se pudo, no se pone un cero: un cero ahi
+    se lee como "el zip salio vacio", que es otra cosa.
+    """
+    try:
+        bytes_ = archivo.stat().st_size
+    except OSError:
+        return "no se pudo medir cuanto pesa"
+    if bytes_ >= 1024 * 1024:
+        return f"{bytes_ / (1024 * 1024):.1f} MiB".replace(".", ",")
+    return f"{bytes_ / 1024:.1f} KiB".replace(".", ",")
+
+
 def _volcar_conceptos(cfg: AppConfig, conceptos: Conceptos) -> None:
     """Hace que cfg.clases sea lo que hay en disco, no lo que diga el YAML.
 
@@ -593,6 +628,10 @@ def _atender_panel(
         return _panel_borrar(accion, tecla, pan, conceptos, miniaturas, refrescar)
     if pan.modo == panel.MODO_ORDEN:
         return _panel_orden(accion, tecla, pan, ordenes)
+    if pan.modo == panel.MODO_ORDENES:
+        return _panel_ordenes(accion, tecla, pan, ordenes)
+    if pan.modo == panel.MODO_BORRAR_ORDEN:
+        return _panel_borrar_orden(accion, tecla, pan, ordenes)
     if pan.modo == panel.MODO_FOTOS:
         return _panel_fotos(accion, tecla, pan, conceptos, galeria, miniaturas, refrescar)
     return _panel_lista(accion, tecla, pan, conceptos, galeria, miniaturas, archivar, refrescar)
@@ -609,7 +648,13 @@ def _panel_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
         if cargando and pan.orden is not None:
             pan.cargando_orden, pan.aviso = False, None    # vuelve al avance
             return True, None
-        pan.modo, pan.cargando_orden, pan.aviso = panel.MODO_LISTA, False, None
+        # SE VUELVE AL HISTORIAL, no a los conceptos. La jerarquia es taller ->
+        # ORDENES -> esta orden: subir un piso desde una orden es la lista de ordenes, y
+        # caer en la lista de conceptos --que no tiene nada que ver con lo que se estaba
+        # haciendo-- dejaba al operario sin forma de volver a la orden de al lado.
+        # El historial se vuelve a leer porque adentro pudo abrirse, retomarse o cerrarse
+        # una orden, y la lista de antes mostraria el avance viejo.
+        _abrir_historial(pan, ordenes)
         return True, None
 
     if cargando:
@@ -619,7 +664,11 @@ def _panel_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
     if accion == "nueva_orden" or tecla == ord("n"):
         pan.cargando_orden = True
         pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
-        pan.campo, pan.aviso = 0, None
+        # El ofrecimiento de retomar se apaga con el formulario nuevo, igual que cuando se
+        # entra desde el historial: si quedara puesto, el panel dibujaria el boton RETOMAR LA
+        # GUARDADA sobre un formulario vacio, y un boton que no corresponde es lo mismo que
+        # un boton que no hace nada.
+        pan.campo, pan.aviso, pan.retomar = 0, None, ""
     elif accion == "siguiente_sierra" or tecla == ord("s"):
         posicion = orden.siguiente_sierra()
         if ordenes.guardar() is None:
@@ -668,12 +717,79 @@ def _panel_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def _es_campo_de_numero(pan) -> bool:
+    """Si el cursor del formulario esta en un campo que solo acepta digitos.
+
+    IMPORTA PARA SABER DONDE UNA LETRA NO ES UN DATO. En "cuantas sierras" y en "dientes por
+    sierra" el formulario ya contesta "aca va un numero" a cualquier letra, asi que ahi se le
+    puede dar un significado a la 'r' sin robarsela a nadie. En los campos de texto la 'r'
+    sigue siendo una 'r': hay clientes que se llaman Rodriguez, y una tecla que a veces
+    escribe y a veces retoma una orden es peor que no tenerla.
+    """
+    if not 0 <= pan.campo < len(panel.CAMPOS_ORDEN):
+        return False
+    return panel.CAMPOS_ORDEN[pan.campo][1] == "numero"
+
+
+def _retomar_la_guardada(pan, ordenes) -> tuple[bool, Optional[str]]:
+    """Retoma la orden sin cerrar que el formulario encontro con ese numero.
+
+    SE VUELVE A MIRAR QUE LOS DATOS SEAN LOS MISMOS que cuando se ofrecio. pan.retomar
+    guarda la huella de los cinco campos: si el operario cambio alguno desde entonces, lo
+    que hay guardado con ese numero puede ser otra cosa, asi que no se retoma nada y se
+    vuelve a preguntar. Es el mismo recaudo que habia antes, con la diferencia de que ahora
+    la respuesta no es un ENTER.
+    """
+    valores = [v.strip() for v in pan.valores]
+    if not pan.retomar or "|".join(valores) != pan.retomar:
+        pan.retomar = ""
+        pan.aviso = ("los datos del formulario cambiaron: apreta ENTER para ver que hay "
+                     "guardado con ese numero")
+        return True, None
+    # El mismo texto que Orden.nueva() deja en numero: se junta los espacios y nada mas. El
+    # saneado para el nombre del archivo lo hace Ordenes.
+    numero = " ".join(str(valores[0]).split())
+    archivo = ordenes.ruta(numero).name
+    pan.retomar = ""
+    retomada = ordenes.retomar(numero)
+    if retomada is None or ordenes.fallo_al_guardar:
+        pan.aviso = f"no se pudo retomar {archivo}; revise el disco"
+        return True, None
+    pan.orden, pan.cargando_orden, pan.aviso = retomada, False, None
+    return True, (
+        f"ORDEN {retomada.numero} RETOMADA: "
+        f"{retomada.total_revisados} de {retomada.total_dientes} dientes"
+    )
+
+
 def _cargar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
     """El formulario. Un campo por vez, ENTER pasa al siguiente."""
     if accion is not None and accion.startswith("campo:"):
         pan.campo = int(accion.split(":", 1)[1])
         pan.aviso = None
         return True, None
+
+    # LA 'r' RETOMA LA ORDEN GUARDADA. EL ENTER NO LA RETOMA MAS, Y ESO ES EL ARREGLO.
+    # QUE SE ROMPIA: el ENTER preguntaba Y contestaba. El primer ENTER del ultimo campo
+    # ofrecia "ENTER otra vez para RETOMARLA" y el segundo la retomaba, asi que dos ENTER
+    # seguidos --el dedo apoyado, o la costumbre de apretar ENTER por cada campo-- retomaban
+    # la orden de ayer sin que el operario llegara a leer el aviso.
+    # REPRODUCIDO con el manejador de teclas de verdad: en el disco, la orden 1234 del taller
+    # sin cerrar, con 7 de 80 dientes. El operario teclea 1234, "NP-998 urgente", "Aserradero
+    # del Litoral", 4 sierras y 80 dientes, y aprieta ENTER dos veces: quedaba abierta la
+    # orden de ayer --1 sierra de 80, cliente '1234', nota '1234'-- y las 4 sierras y el
+    # cliente que acababa de teclear no iban a ninguna parte.
+    # AHORA EL ENTER SOLO PREGUNTA, cuantas veces se lo apriete, y la respuesta es otra
+    # tecla. La 'r' se acepta donde una letra no es un dato --los campos de numero, que es
+    # donde el ENTER del ultimo campo deja el cursor-- y el boton RETOMAR LA GUARDADA sirve
+    # siempre, tambien si se llego aca con un clic desde un campo de texto.
+    if accion == "retomar_la_guardada" or (
+        pan.retomar and tecla == ord("r") and _es_campo_de_numero(pan)
+    ):
+        if not pan.retomar:
+            # Un clic sobre un boton que ya no esta dibujado: no hay nada ofrecido.
+            return True, None
+        return _retomar_la_guardada(pan, ordenes)
 
     if accion == "crear_orden" or (tecla == 13 and pan.campo >= len(panel.CAMPOS_ORDEN) - 1):
         valores = [v.strip() for v in pan.valores]
@@ -699,31 +815,29 @@ def _cargar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
             if guardada is None or guardada.cerrada:
                 pan.aviso = f"ya hay una orden guardada en {archivo}; usa otro numero"
                 return True, None
-            # SIN CERRAR: se ofrece RETOMARLA. Antes esto era un callejon --"usa otro
-            # numero"-- cuando lo que el operario casi siempre quiere es seguir la orden
-            # que ya habia empezado, y el programa no tenia como volver a ella. No se
-            # retoma sola porque el formulario trae sierras, dientes y cliente nuevos que
-            # se perderian sin avisar: hace falta un ENTER mas, y si se cambia cualquier
-            # dato del formulario se vuelve a preguntar.
-            huella = "|".join(valores)
-            if pan.retomar != huella:
-                pan.retomar = huella
-                pan.aviso = (
-                    f"ya hay una orden sin cerrar en {archivo}: "
-                    f"{guardada.total_revisados} de {guardada.total_dientes} dientes. "
-                    "ENTER otra vez para RETOMARLA, o cambia el numero"
-                )
-                return True, None
-            pan.retomar = ""
-            retomada = ordenes.retomar(orden.numero)
-            if retomada is None or ordenes.fallo_al_guardar:
-                pan.aviso = f"no se pudo retomar {archivo}; revise el disco"
-                return True, None
-            pan.orden, pan.cargando_orden, pan.aviso = retomada, False, None
-            return True, (
-                f"ORDEN {retomada.numero} RETOMADA: "
-                f"{retomada.total_revisados} de {retomada.total_dientes} dientes"
+            # SIN CERRAR: SE OFRECE RETOMARLA, Y NADA MAS. Antes esto era un callejon
+            # --"usa otro numero"-- cuando lo que el operario casi siempre quiere es seguir
+            # la orden que ya habia empezado, y el programa no tenia como volver a ella. No
+            # se retoma sola porque el formulario trae sierras, dientes y cliente nuevos que
+            # se perderian sin avisar.
+            # ESTE ENTER NO RETOMA, LO APRIETE LAS VECES QUE SEA: solo deja la pregunta en
+            # pantalla y arma el boton. Contesta la 'r' o el boton; mira la rama de arriba.
+            # Y la huella queda guardada para que, si se cambia cualquier dato, la respuesta
+            # no valga para los datos nuevos.
+            pan.retomar = "|".join(valores)
+            # EL AVISO NOMBRA LA TECLA QUE DE VERDAD VA A ANDAR DONDE ESTA EL CURSOR. En un
+            # campo de texto la 'r' es una letra, asi que ahi se nombra el boton.
+            # MEDIDO con tipografia.medir en 20 negrita, que es como el formulario lo dibuja:
+            # 1.019 px la version de la 'r' y 1.155 px la del boton, de los 1.240 que entran.
+            if _es_campo_de_numero(pan):
+                como = "Apreta 'r' para RETOMARLA, o cambia el numero"
+            else:
+                como = "Apreta el boton RETOMAR LA GUARDADA, o cambia el numero"
+            pan.aviso = (
+                f"ya hay una orden sin cerrar en {archivo}: "
+                f"{guardada.total_revisados} de {guardada.total_dientes} dientes. {como}"
             )
+            return True, None
         ordenes.abrir(orden)
         if ordenes.fallo_al_guardar:
             # No se anuncia una orden que no llego al disco: el operario la daria por
@@ -748,6 +862,329 @@ def _cargar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
         elif len(pan.valores[pan.campo]) < 40:
             pan.valores[pan.campo] += letra
             pan.aviso = None
+    return True, None
+
+
+def _limpiar_aviso(pan) -> None:
+    """Borra el aviso del panel, SALVO el que esta pegado.
+
+    Un aviso normal cuenta algo que acaba de pasar y la tecla siguiente lo tapa, que es lo
+    correcto: si no, el operario arrastra carteles viejos. Pero el del borrado a medias no
+    es eso: es el UNICO lugar donde se nombra la carpeta de papelera que quedo con la mitad
+    de la orden adentro, y el que lo hacia desaparecer era justamente la tecla del
+    reintento. Mira panel.EstadoPanel.aviso_pegado.
+    """
+    if not getattr(pan, "aviso_pegado", False):
+        pan.aviso = None
+
+
+def _decir(pan, texto: str) -> None:
+    """Deja un aviso nuevo en el panel y APAGA el pegado.
+
+    Porque pegado quiere decir "este texto de aca no se limpia solo", no "este renglon de la
+    pantalla no se limpia nunca": si el aviso de un borrado a medias quedara pegando un
+    "no se pudo exportar" que vino despues, el operario se quedaria arrastrando un cartel
+    viejo que ninguna tecla saca. El unico que vuelve a prenderlo es el borrado.
+    """
+    pan.aviso = texto
+    pan.aviso_pegado = False
+
+
+def _abrir_historial(pan, ordenes) -> None:
+    """Deja el panel en el historial, con la orden abierta ya elegida.
+
+    La orden abierta se busca y se elige porque el que aprieta 'o' con una orden en curso
+    casi siempre quiere esa: sin esto caia parado en la primera fila --la mas nueva, que
+    puede ser otra-- y un ENTER de reflejo retomaba la que no era.
+
+    EL HISTORIAL SE LEE DEL DISCO CADA VEZ QUE SE ENTRA, y tambien al volver de una orden,
+    al retomar y al borrar: medido sobre una copia de las 4 ordenes de verdad del taller,
+    mediana 2,42 ms y maximo 7,12 ms en 50 vueltas. Al lado de los 1.200 ms que dura apoyar
+    un diente no se nota, y una lista vieja muestra el avance de antes o una orden que ya
+    no esta. Con las 4 de hoy no hay ninguna abierta --5113546 se cerro el 16/11/2026
+    12:11:25-- asi que queda elegida la primera fila, que es la mas nueva.
+    """
+    pan.modo, pan.aviso = panel.MODO_ORDENES, None
+    # Entrar de nuevo al historial empieza de nuevo: hasta el aviso pegado se va. Lo que
+    # quedo de un borrado a medias sigue escrito en el registro, que es donde se mira
+    # despues.
+    pan.aviso_pegado = False
+    pan.cargando_orden = False
+    pan.historial = ordenes.historial()
+    pan.orden_elegida, pan.pagina_ordenes = 0, 0
+    for indice, fila in enumerate(pan.historial):
+        if fila.esta_abierta:
+            pan.orden_elegida = indice
+            # LA PAGINA SE CUENTA CON LAS FILAS QUE SE DIBUJAN, que es lo que dejo anotado
+            # _dibujar_ordenes --o lo que midio run_live antes de abrir el panel-- y no un 8
+            # fijo: mira panel.filas_de_ordenes().
+            pan.pagina_ordenes = indice // max(1, pan.filas_por_pagina)
+            break
+
+
+def _panel_ordenes(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
+    """El historial: todas las ordenes del taller, para retomar, exportar o borrar.
+
+    Hasta ahora la unica orden que se podia tocar era la marcada como abierta: listar() no
+    se llamaba desde ninguna parte del programa, asi que una orden de la semana pasada --la
+    del reclamo que entra por telefono-- no se podia ni mirar sin abrir el Explorador.
+
+    ESTA PANTALLA NO BORRA NADA DE UN SAQUE: la 'b' lleva a la confirmacion, igual que con
+    los conceptos. Lo unico que decide aca mismo es exportar, que solo agrega un .zip.
+    """
+    if accion == "volver_ordenes" or tecla in (_ESC, ord("q")):
+        # ESC cierra el panel entero y vuelve a la pantalla del taller: el historial ES el
+        # primer piso, no hay nada mas arriba a donde subir.
+        return False, None
+
+    # LAS FILAS QUE SE DIBUJARON, no un 8 fijo. _dibujar_ordenes las mide contra el alto del
+    # lienzo y las deja anotadas en el estado, y el alto del lienzo depende de la camara:
+    # medido en el modo del taller con alto util de 672 px, la camara en 640x480 da un
+    # lienzo de 672 px y 8 filas, y en 1280x720 y 1920x1080 da 656 px y 7 filas. Con 8 fijo
+    # y la camara en 1280x720, la tecla 8 dejaba elegida la fila 7 --que no estaba
+    # dibujada-- y la 'b' siguiente se llevaba una orden que el operario nunca vio.
+    # Reproducido corriendo el bucle con el guion de teclas o,8,b,s.
+    por_pagina = max(1, pan.filas_por_pagina)
+
+    if accion is not None and accion.startswith("elegir_orden:"):
+        pan.orden_elegida = int(accion.split(":", 1)[1])
+        _limpiar_aviso(pan)
+    elif tecla in _TECLAS_DIGITO and _TECLAS_DIGITO[tecla] <= por_pagina:
+        # Solo los digitos de ESTA pagina, igual que en el modo fotos: un digito de mas
+        # elegiria una orden que no se ve, que es justo la que no hay que borrar a ciegas.
+        indice = pan.pagina_ordenes * por_pagina + _TECLAS_DIGITO[tecla] - 1
+        if indice < len(pan.historial):
+            pan.orden_elegida = indice
+            _limpiar_aviso(pan)
+    elif tecla in (ord("s"), ord("w")) and pan.historial:
+        paso = 1 if tecla == ord("s") else -1
+        pan.orden_elegida = (pan.orden_elegida + paso) % len(pan.historial)
+        # LA PAGINA SIGUE AL ELEGIDO. Sin esto, bajar desde la ultima fila de la pagina
+        # marcaba la orden siguiente sin cambiar de pagina: la marca desaparecia de la
+        # pantalla y las teclas siguientes --e, b-- trabajaban sobre una fila que el
+        # operario no veia.
+        pan.pagina_ordenes = pan.orden_elegida // por_pagina
+    elif tecla == ord(" "):
+        paginas = max(1, (len(pan.historial) + por_pagina - 1) // por_pagina)
+        pan.pagina_ordenes = (pan.pagina_ordenes + 1) % paginas
+        pan.orden_elegida = min(
+            pan.pagina_ordenes * por_pagina, max(0, len(pan.historial) - 1)
+        )
+
+    # LA FILA SE BUSCA DESPUES DE MOVERSE, no antes: con la 's' y la fila elegida leidas
+    # en el mismo orden al reves, un clic que elige y una tecla que actua en la misma vuelta
+    # trabajaban sobre la fila vieja.
+    fila = None
+    if 0 <= pan.orden_elegida < len(pan.historial):
+        fila = pan.historial[pan.orden_elegida]
+
+    if accion == "nueva_orden_historial" or tecla == ord("n"):
+        pan.modo, pan.cargando_orden, pan.aviso = panel.MODO_ORDEN, True, None
+        pan.aviso_pegado = False
+        pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
+        # El 'retomar' se limpia aca y no en el formulario: es la huella del "ENTER otra vez
+        # para RETOMARLA" de la vez anterior, y si quedara puesta el primer ENTER de este
+        # formulario retomaria una orden sin preguntar nada.
+        pan.campo, pan.retomar = 0, ""
+        return True, None
+
+    if accion == "abrir_orden" or tecla == 13:
+        if fila is None:
+            return True, None
+        if fila.ilegible:
+            _decir(pan, f"el archivo {fila.archivo}.json esta pero no se puede leer: "
+                        "hay que mirarlo a mano, el programa no lo va a abrir")
+            return True, None
+        if fila.cerrada:
+            # NO SE REABRE UNA ORDEN CERRADA, y se dice por que: su informe ya se imprimio
+            # y se entrego, asi que seguir anotando dientes deja el papel del cliente
+            # diciendo menos de lo que el archivo guarda. Sin este aviso, retomar()
+            # devolvia None y la pantalla culpaba al disco, que no tenia nada que ver.
+            _decir(pan, f"la orden {fila.numero} se cerro el {fila.cerrada}: su informe "
+                        "ya salio. Para exportarla apreta 'e'")
+            return True, None
+        # SE RETOMA EL ARCHIVO QUE LEYO EL HISTORIAL, no el numero de adentro. Pero
+        # retomar() deja la orden abierta y, de ahi en adelante, cada diente se guarda en
+        # ruta(numero) --el numero saneado-- asi que una orden cuyo archivo NO se llama como
+        # su numero se leeria de un archivo y se escribiria en otro. Eso es peor que no
+        # retomarla: el operario se pasaria la tarde anotando dientes encima de la orden del
+        # cliente. Medido con "123 - copia.json" (numero 123 adentro, que es lo que deja
+        # Windows al copiar): el archivo es '123 - copia' y sanear_numero da '123_-_copia',
+        # mientras que lo que se escribiria es 123.json. Asi que se mira primero y, si no
+        # coinciden, no se retoma y se dice por que: exportar y borrar SI andan, porque esos
+        # ya van por el archivo.
+        donde_escribiria = ordenes.ruta(fila.numero).stem
+        if fila.archivo != donde_escribiria:
+            # MEDIDO en 20 negrita, que es como el panel dibuja el aviso: este texto con los
+            # nombres mas largos que hay en el taller da 1.133 px de los 1.258 que entran.
+            # Un archivo con nombre mas largo lo acorta _dibujar_ordenes.
+            _decir(pan, f"{fila.archivo}.json no se llama como su numero "
+                        f"({fila.numero}): anotar ahi escribiria en "
+                        f"{donde_escribiria}.json. Exportala con 'e' o borrala con 'b'")
+            return True, None
+        retomada = ordenes.retomar(fila.numero)
+        if retomada is None or ordenes.fallo_al_guardar:
+            _decir(pan, f"no se pudo retomar {fila.archivo}; revise el disco")
+            return True, None
+        pan.orden, pan.cargando_orden, pan.aviso = retomada, False, None
+        pan.aviso_pegado = False
+        pan.modo = panel.MODO_ORDEN
+        # El historial se vuelve a leer porque esta orden acaba de pasar a ser la abierta:
+        # la fila que queda atras diria que no lo es.
+        pan.historial = ordenes.historial()
+        return True, (
+            f"ORDEN {retomada.numero} RETOMADA: "
+            f"{retomada.total_revisados} de {retomada.total_dientes} dientes"
+        )
+
+    if accion == "exportar_orden" or tecla == ord("e"):
+        if fila is None:
+            return True, None
+        if fila.ilegible:
+            _decir(pan, f"el archivo {fila.archivo}.json no se puede leer: no se "
+                        "exporta como prueba algo que el programa no pudo abrir")
+            return True, None
+        # EL ARCHIVO QUE LEYO EL HISTORIAL, no el numero de adentro: mira el comentario de
+        # abajo, en el borrado. Reproducido: con "123.json" (cliente EL CLIENTE BUENO) y
+        # "copia_vieja.json" (cliente UNA COPIA VIEJA), las dos con numero 123 adentro,
+        # exportar la fila copia_vieja armaba un zip con la orden.json de EL CLIENTE BUENO.
+        donde = ordenes.exportar(fila.numero, archivo=fila.archivo)
+        if donde is None:
+            _decir(pan, "no se pudo exportar; revise el disco")
+            return True, None
+        # Se nombra la carpeta ademas del archivo --el operario tiene que ir a buscar ese
+        # .zip con el Explorador para copiarlo al pendrive-- Y CUANTO PESA. Cada 'e' escribe
+        # un zip NUEVO, sin tope y sin limpieza: medido, la orden de verdad 5113546 (15
+        # dientes, ninguna prueba) da 3.275 bytes, y una de 4 sierras de 80 dientes con las
+        # 320 fotos de prueba adentro da 28.178.007 bytes --26,9 MiB-- en 847 ms. Diez 'e'
+        # de esas en un dia son 269 MiB que nadie borra, y sin el tamanio en pantalla el
+        # operario no tiene de donde darse cuenta de que esta llenando el disco. El cartel
+        # mas largo que sale asi mide 761 px de los 1.244 que entran: medido con
+        # tipografia.medir en 22 negrita, que es como se dibuja.
+        return True, (f"EXPORTADA EN {donde.parent.name}/{donde.name} "
+                      f"- {_cuanto_pesa(donde)}")
+
+    if accion == "borrar_orden" or tecla == ord("b"):
+        if fila is None:
+            return True, None
+        # LA 'b' DEL REINTENTO NO SE LLEVA EL AVISO DEL BORRADO A MEDIAS. Antes este renglon
+        # ponia pan.aviso en None de una, y ese aviso era el unico lugar donde se nombraba
+        # la carpeta de papelera con la mitad de la orden adentro: el operario que apretaba
+        # 'b' para reintentar lo perdia antes de poder leerlo. REPRODUCIDO con la orden 1234
+        # y 3 pruebas, trabando una foto con msvcrt.locking: el aviso nombraba
+        # _papelera/20261116_164709 y despues de la 'b' pan.aviso era None.
+        pan.modo = panel.MODO_BORRAR_ORDEN
+        _limpiar_aviso(pan)
+    return True, None
+
+
+def _panel_borrar_orden(accion, tecla, pan, ordenes) -> tuple[bool, Optional[str]]:
+    """La confirmacion de borrado de una orden. ENTER NO alcanza, a proposito.
+
+    Igual que con los conceptos: en el historial ENTER es "retomar esta orden", la tecla
+    con la que se entra a trabajar. Si aca tambien confirmara, una 'b' de mas seguida del
+    ENTER de siempre se llevaria la orden --y sus pruebas-- a la papelera.
+    """
+    fila = None
+    if 0 <= pan.orden_elegida < len(pan.historial):
+        fila = pan.historial[pan.orden_elegida]
+
+    if accion == "confirmar_borrado_orden" or tecla == ord("s"):
+        if fila is None:
+            pan.modo = panel.MODO_ORDENES
+            return True, None
+        era_la_abierta = fila.esta_abierta
+        # SE BORRA EL ARCHIVO QUE LEYO EL HISTORIAL, no el numero de adentro del .json.
+        # Antes iba fila.numero y Ordenes le volvia a aplicar sanear_numero(), asi que la
+        # fila elegida y el archivo que se iba podian ser dos ordenes distintas.
+        # REPRODUCIDO DOS VECES, con el manejador de teclas de verdad:
+        #   (a) "123.json" (cliente EL CLIENTE BUENO) y "copia_vieja.json" (cliente UNA
+        #       COPIA VIEJA), las dos con numero 123 adentro. Se elige la fila copia_vieja,
+        #       se aprieta b+s: el que se fue a la papelera fue 123.json, el del cliente, y
+        #       copia_vieja.json quedo en su lugar.
+        #   (b) "123 - copia.json", que es como lo llama Windows al copiar y lo que la
+        #       pantalla de borrado le sugiere al operario. sanear_numero("123 - copia") da
+        #       "123_-_copia", asi que pasar fila.archivo por `numero` TAMPOCO alcanzaba:
+        #       hace falta el parametro archivo=, que entra sin sanear.
+        donde = ordenes.borrar(fila.numero, archivo=fila.archivo)
+        pan.modo = panel.MODO_ORDENES
+        # EL HISTORIAL SE RELEE SIEMPRE, salga bien o salga mal: un borrado que fallo a
+        # mitad de camino ya movio parte de los archivos, asi que la lista de antes es
+        # tan vieja en un caso como en el otro. Y se recorta la eleccion igual que al
+        # borrar una foto, o la fila elegida queda apuntando a una orden que no esta.
+        pan.historial = ordenes.historial()
+        pan.orden_elegida = max(0, min(pan.orden_elegida, len(pan.historial) - 1))
+        # Con las filas que se dibujaron, no con un 8 fijo: mira panel.filas_de_ordenes().
+        por_pagina = max(1, pan.filas_por_pagina)
+        ultima = max(0, (len(pan.historial) + por_pagina - 1) // por_pagina - 1)
+        pan.pagina_ordenes = min(pan.pagina_ordenes, ultima)
+        if donde is None:
+            # SE NOMBRA LA ORDEN COMO LA NOMBRA LA PANTALLA, con el archivo cuando hace
+            # falta: "no se pudo borrar la orden" a secas, con dos filas que dicen 1234, no
+            # dice cual de las dos sigue ahi. Y queda PEGADO: la orden no se borro, eso no es
+            # una novedad que la tecla siguiente pueda tapar.
+            pan.aviso = (f"no se pudo borrar la orden {panel.nombre_de_la_fila(fila)}; "
+                         "revise el disco")
+            pan.aviso_pegado = True
+            return True, None
+        if era_la_abierta:
+            # Ya no hay orden en curso: borrar() suelta el .abierta. Se dice tambien aca
+            # para que el panel no siga mostrando el avance de una orden que se fue. SE LE
+            # PREGUNTA A ordenes, no se pone None a mano: un borrado que se traba antes de
+            # llegar al .json deja el marcador puesto --a proposito, para que el operario no
+            # pierda la orden abierta por una foto que no se pudo mover-- y ahi el panel
+            # tiene que seguir mostrando esa orden, no vaciarse.
+            pan.orden, pan.cargando_orden = ordenes.abierta, False
+        if not donde.completo:
+            # QUEDO A MEDIAS Y SE DICE CON TODAS LAS LETRAS. Antes esto era un "no se pudo
+            # borrar la orden" que era falso justo cuando mas importaba: medido con una foto
+            # trabada --lo que pasa si el operario la tiene abierta en el visor de Windows--
+            # el .json y los dos informes YA estaban en la papelera y el historial habia
+            # quedado vacio, asi que el operario buscaba la orden en la unica pantalla desde
+            # donde se la podia exportar. Con el orden nuevo de los movimientos el .json es
+            # lo ultimo que se va, asi que lo normal es que la orden siga ENTERA en la lista
+            # y lo que falte sea una foto; igual hay que nombrar la carpeta de la papelera,
+            # que es a donde hay que ir a mirar.
+            #
+            # VA COMO AVISO DEL PANEL Y NO COMO CARTEL: el panel se queda abierto en el
+            # historial, no dibuja estado.mensaje, y el cartel verde del taller no se ve
+            # hasta que se cierre el panel. Se devuelve None para que el bucle no pise este
+            # aviso con un texto mas corto.
+            #
+            # Y QUEDA PEGADO: la 'b' del reintento lo limpiaba, y es el unico lugar donde se
+            # nombra la carpeta de papelera. Mira panel.EstadoPanel.aviso_pegado.
+            #
+            # SE NOMBRA EL ARCHIVO Y NO EL NUMERO: lo que quedo en la papelera se llama como
+            # el archivo, y con dos filas que dicen 1234 el numero no alcanza para saber cual
+            # se fue a medias. La carpeta de papelera va PRIMERO porque es a donde hay que ir
+            # a mirar, y porque si el texto se pasara de ancho _acortar corta por el final.
+            # MEDIDO en 20 negrita, que es como el panel lo dibuja: con los nombres mas largos
+            # del taller da 1.000 px de los 1.258 que entran. Nombrando el numero Y el archivo
+            # daba 1.319 px y se cortaba justo la carpeta.
+            pan.aviso = (
+                f"el borrado de {fila.archivo}.json quedo A MEDIAS en "
+                f"_papelera/{donde.destino.name}: falto {donde.falto}"
+            )
+            pan.aviso_pegado = True
+            return True, None
+        # SALIO COMPLETO: se limpia hasta el aviso pegado, porque lo que decia --que habia
+        # quedado a medias-- ya no es cierto.
+        pan.aviso, pan.aviso_pegado = None, False
+        # EL CARTEL NOMBRA LA MISMA ORDEN QUE NOMBRO LA PANTALLA, con el archivo cuando no se
+        # llama como su numero. Medido con la orden 1234 del taller y su copia de Windows: los
+        # dos borrados devolvian el mismo cartel, "ORDEN 1234 A LA PAPELERA", asi que el
+        # operario no tenia con que saber cual de las dos se habia ido.
+        # MEDIDO con tipografia.medir en 22 negrita, que es como se dibuja el cartel del
+        # taller: 784 px de los 1.244 que entran con el nombre mas largo.
+        return True, (f"ORDEN {panel.nombre_de_la_fila(fila)} A LA PAPELERA: "
+                      f"{donde.destino.name}")
+
+    if accion == "cancelar_borrado_orden" or tecla in (_ESC, ord("n"), ord("q")):
+        # Tampoco al decir "no, dejala": lo que el aviso pegado dice --que un borrado quedo a
+        # medias y donde esta la mitad-- sigue siendo cierto despues de cancelar, y el que
+        # cancela es justamente el que va a ir a mirar esa carpeta.
+        pan.modo = panel.MODO_ORDENES
+        _limpiar_aviso(pan)
     return True, None
 
 
@@ -804,12 +1241,6 @@ def _panel_lista(
             )
         else:
             pan.modo = panel.MODO_BORRAR
-    elif accion == "orden" or tecla == ord("o"):
-        pan.modo, pan.aviso = panel.MODO_ORDEN, None
-        pan.cargando_orden = pan.orden is None
-        if pan.cargando_orden:
-            pan.valores = ["" for _ in panel.CAMPOS_ORDEN]
-            pan.campo = 0
     elif (accion == "fotos" or tecla == ord("v")) and elegido is not None:
         pan.fotos = _fotos_del_destino(elegido, conceptos, galeria)
         pan.modo, pan.pagina, pan.foto_elegida, pan.aviso = panel.MODO_FOTOS, 0, 0, None
@@ -1243,6 +1674,9 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             candidatas_por_concepto=cfg.memoria.candidatas_por_concepto,
             vecinos_por_concepto=cfg.memoria.vecinos_por_concepto,
             maximo_autoevaluacion=cfg.memoria.maximo_autoevaluacion,
+            # El mismo minimo con el que se juzga: la memoria lo necesita para medirse con
+            # la regla con la que decide. Ver Memoria.autoevaluacion().
+            minimo_por_concepto=cfg.memoria.minimo_por_concepto,
         )
         memoria.sincronizar(conceptos.mapa())
         _registro.info("%s", memoria.resumen())
@@ -1342,6 +1776,61 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
         cuadro = cuadro_analizado if cuadro_analizado is not None else imagen
         return dientes.Diente(caja=elegido.caja, area=0.0).recortar(cuadro)
 
+    def prueba_del_diente(imagen: np.ndarray) -> tuple[str, str]:
+        """Guarda la foto que respalda al diente que SIGUE. Devuelve (ruta, falta).
+
+        SE LLAMA ANTES DE orden.anotar(), y el orden no es un gusto: anotar() es lo que
+        ASIGNA el numero de diente y devuelve None cuando la sierra ya esta completa, asi
+        que el numero no se puede averiguar despues sin haber escrito ya la foto, ni la
+        foto antes sin saber el numero. La salida es ESPIAR primero: orden.sierra() y
+        sierra.proximo() dicen cual viene SIN tocar nada, se escribe la foto con ese
+        numero puesto, y recien ahi se anota con la ruta en la mano. Asi el .json nunca
+        nombra una foto que no esta --es lo que paso con las 14 fotos de las ordenes 123 y
+        1234, que hoy estan en la papelera mientras el informe_123.csv ya entregado las
+        sigue nombrando--. Al reves no le miente a nadie: una foto de mas en el deposito.
+
+        SI NO SE PUDO ESCRIBIR, la ruta vuelve vacia y `falta` dice que paso: el diente se
+        anota IGUAL, con prueba vacia y esa nota. Perder la foto es malo, perder el diente
+        es peor, y un renglon que dice que no tiene prueba no inventa nada; el diente que
+        no esta en el informe es el diente que nadie reviso.
+
+        LA PRUEBA NO ENTRA A LA COLECCION y por eso esto no cuesta lo que cuesta
+        archivar: verificado leyendo ordenes.guardar_prueba(), que solo comprime y escribe
+        en data/pruebas/ y no llama ni a refrescar() ni a sincronizar() ni mira el almacen.
+        Archivar una foto arrastra refrescar(), que va de 209 ms con 15 fotos a 3.153 ms
+        con 320; esto no.
+
+        MEDIDO EN ESTA PC con una foto de verdad del microscopio (640x480, 95.648 bytes),
+        80 dientes seguidos --una sierra entera-- por el camino completo
+        "espiar + guardar_prueba + anotar + guardar()": mediana 4,98 ms y p95 7,18 ms
+        (tres corridas: medianas 4,95 / 4,98 / 5,07 ms). El mismo camino SIN prueba, que es
+        lo que hace el programa hoy, da mediana 2,27 ms: la prueba agrega 2,7 ms. Contra
+        los 1.200 ms que el operario apoya cada diente, el camino entero es el 0,4 % del
+        tiempo. El max salto a 13, 37 y 63 ms segun la corrida, pero el camino sin prueba
+        tambien salto a 46 ms: es el disco tosiendo, no la foto.
+
+        LO QUE OCUPA, medido escribiendo las 80 de verdad: 7.670.480 bytes = 7,32 MiB la
+        sierra entera, y el .json de esa orden queda en 30.770 bytes. Una orden de 4
+        sierras de 80 dientes son 29,3 MiB. En el C: de esta PC hay 116,7 GiB libres:
+        entran mas de 4.000 ordenes asi antes de que el disco diga basta.
+        """
+        orden = ordenes.abierta
+        if orden is None or imagen is None:
+            return "", ""
+        sierra = orden.sierra()
+        que_viene = sierra.proximo() if sierra is not None else None
+        if que_viene is None:
+            # La sierra ya esta completa: anotar() va a devolver None y no hay diente que
+            # respaldar. No se escribe ninguna foto --una prueba de un diente que no se
+            # anoto no respalda nada-- y el camino sigue como seguia hasta hoy.
+            return "", ""
+        ruta = ordenes.guardar_prueba(
+            orden.numero, sierra.numero, que_viene.numero, imagen
+        )
+        if ruta is None:
+            return "", "no se pudo guardar la foto de prueba"
+        return ruta, ""
+
     def archivar(destino: str, imagen: np.ndarray) -> str:
         """Manda la foto al destino elegido y devuelve el mensaje para la pantalla."""
         if destino == _DESTINO_MODELO:
@@ -1422,12 +1911,22 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             coinciden = (
                 juicio is not None and juicio.decidio and juicio.concepto == destino
             )
+            # LA FOTO DE PRUEBA VA ANTES DEL RENGLON: mira prueba_del_diente(). Se le
+            # pasa `completa` --el cuadro entero que el programa juzgo-- y NO el recorte
+            # que se acaba de archivar: el recorte es para ensenarle a la memoria, y lo
+            # que contesta un reclamo es lo que se vio en la pantalla. Son dos fotos con
+            # dos trabajos distintos, y por eso tambien son dos campos distintos del
+            # diente: `foto` es el nombre pelado de la que entro a la coleccion y `prueba`
+            # es la ruta de la que respalda el veredicto.
+            prueba, falta_prueba = prueba_del_diente(completa)
             diente = orden.anotar(
                 estado=destino,
                 parecido=juicio.parecido if coinciden else None,
                 aprobado=destino not in cfg.clases_defecto,
                 origen=f"lo archivo el operario{opinion}",
                 foto=ruta.name,
+                nota=falta_prueba,
+                prueba=prueba,
             )
             guardado = ordenes.guardar()
             actualizar_orden()
@@ -1443,13 +1942,25 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 # orden no, y es lo que hay que decir: lo otro el operario lo da por hecho.
                 mensaje = _NO_SE_GUARDO
             elif diente is None:
-                mensaje = "ESTA SIERRA YA ESTA COMPLETA - pase a la siguiente con 'o'"
+                # LA 'o' NO PASA A LA SIGUIENTE SIERRA: abre el HISTORIAL. Pasar de
+                # sierra son tres teclas, y el cartel las dice en el orden en que se
+                # aprietan: 'o' abre el historial con la orden en curso ya elegida, ENTER la
+                # retoma y entra a su pantalla, y ahi la 's' es SIGUIENTE SIERRA. Comprobado
+                # apretandolas con el manejador de teclas de verdad.
+                mensaje = ("ESTA SIERRA YA ESTA COMPLETA - para la que sigue: "
+                           "'o', ENTER y 's'")
             else:
                 sierra = orden.sierra()
                 mensaje = (
                     f"DIENTE {diente.numero} de {sierra.dientes}: {destino}"
                     if sierra is not None else mensaje
                 )
+                # EL OPERARIO TIENE QUE ENTERARSE EN EL MOMENTO. El diente quedo anotado
+                # --eso es lo importante-- pero sin la foto que lo respalda, y eso recien
+                # se nota el dia del reclamo si nadie lo dice ahora. Cuando la orden
+                # tampoco se guardo manda el otro cartel: ahi no hay renglon ni prueba.
+                if falta_prueba:
+                    mensaje += " - SIN FOTO DE PRUEBA"
         return mensaje
 
     recortes_modelo: dict = {}
@@ -1723,18 +2234,31 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 estado.progreso_automatico = automatica.progreso()
                 if confirmado is not None:
                     orden = ordenes.abierta
+                    # ESTE ES EL CAMINO QUE DEJABA LOS DIENTES SIN PRUEBA. Medido en la
+                    # orden de verdad 5113546: 15 dientes anotados, los 15 con origen "la
+                    # memoria, anotado solo" y CERO con foto. El operario no toca una
+                    # tecla, asi que si la foto no se guarda aca no se guarda en ninguna
+                    # parte. Se guarda `vivo`, que es el cuadro que cerro la racha y el
+                    # mismo que se juzgo: la captura automatica solo corre con la imagen
+                    # en vivo (not estado.congelado) y con el juicio fresco.
+                    prueba, falta_prueba = prueba_del_diente(vivo)
                     anotado = orden.anotar(
                         estado=confirmado.estado,
                         parecido=confirmado.parecido,
                         aprobado=confirmado.aprobado,
                         origen=confirmado.origen,
+                        nota=falta_prueba,
+                        prueba=prueba,
                     )
                     sin_guardar = ordenes.guardar() is None
                     actualizar_orden()
                     if sin_guardar:
                         estado.mensaje = _NO_SE_GUARDO
                     elif anotado is None:
-                        estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
+                        # 'o' abre el historial, ENTER retoma la orden y ahi la 's' es
+                        # SIGUIENTE SIERRA. La 'o' sola no cambia de sierra.
+                        estado.mensaje = ("SIERRA COMPLETA - para la que sigue: "
+                                          "'o', ENTER y 's'")
                     else:
                         sierra = orden.sierra()
                         cuantos = sierra.dientes if sierra is not None else 0
@@ -1742,6 +2266,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                             f"DIENTE {anotado.numero} de {cuantos}: "
                             f"{confirmado.estado or 'sin decidir'}"
                         )
+                        if falta_prueba:
+                            estado.mensaje += " - SIN FOTO DE PRUEBA"
                     expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
             else:
                 estado.progreso_automatico = ""
@@ -1807,7 +2333,7 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
             elif tecla == ord("c"):
                 accion = "conceptos"
             elif tecla == ord("o"):
-                accion = "orden"
+                accion = "ordenes"
             elif tecla == ord("g"):
                 accion = "anotar"
             elif tecla in _TECLAS_DIGITO and len(estado.dientes) > 1:
@@ -1832,7 +2358,14 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                 # pidio poder hacer lo segundo sin lo primero.
                 orden = ordenes.abierta
                 if orden is None:
-                    estado.mensaje = "NO HAY ORDEN ABIERTA - abrila con 'o'"
+                    # LA 'o' NO ABRE UNA ORDEN: abre el historial, y ahi hay dos
+                    # caminos distintos. ENTER retoma la orden elegida --y solo si no esta
+                    # cerrada: una orden cerrada ya entrego su informe y el programa lo
+                    # dice-- y la 'n' carga una nueva con el formulario. El cartel nombra
+                    # los dos porque el que aprieta 'g' sin orden abierta puede querer
+                    # cualquiera de los dos.
+                    estado.mensaje = ("NO HAY ORDEN ABIERTA - apreta 'o': ahi se retoma "
+                                      "una o se carga con 'n'")
                 elif automatica.es_lo_ya_anotado(a_mostrar):
                     # LA MISMA FOTO NO SE ANOTA DOS VECES. El freno es por "la imagen no
                     # cambio" y no por "ya apretaste g": con la sierra en la mano cada
@@ -1853,6 +2386,22 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     resultado = _resultado_del_diente(
                         estado, cfg, quien="lo anoto el operario"
                     )
+                    # La prueba, antes del renglon: mira prueba_del_diente(). Se
+                    # guarda `a_mostrar`, que es el cuadro del que salio el veredicto
+                    # --el congelado si el operario lo congelo-- y es el mismo contra el
+                    # que se acaba de comprobar que este diente no estaba ya anotado.
+                    prueba, falta_prueba = prueba_del_diente(a_mostrar)
+                    # LOS DOS FALTANTES VAN JUNTOS EN LA NOTA. Que no hubiera veredicto en
+                    # pantalla y que la prueba no se pudiera escribir son dos cosas
+                    # distintas, y las dos tienen que poder quedar escritas en el mismo
+                    # renglon: pisar una con la otra seria perder la mitad de lo que se
+                    # sabe del diente justo en el papel que contesta un reclamo.
+                    faltantes = [
+                        texto for texto in (
+                            "" if resultado else "no habia veredicto en pantalla",
+                            falta_prueba,
+                        ) if texto
+                    ]
                     anotado = orden.anotar(
                         estado=resultado.estado if resultado else None,
                         parecido=resultado.parecido if resultado else None,
@@ -1861,7 +2410,8 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                             resultado.origen if resultado
                             else "lo anoto el operario, sin veredicto en pantalla"
                         ),
-                        nota="" if resultado else "no habia veredicto en pantalla",
+                        nota="; ".join(faltantes),
+                        prueba=prueba,
                     )
                     sin_guardar = ordenes.guardar() is None
                     actualizar_orden()
@@ -1872,7 +2422,10 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     if sin_guardar:
                         estado.mensaje = _NO_SE_GUARDO
                     elif anotado is None:
-                        estado.mensaje = "SIERRA COMPLETA - pase a la siguiente con 'o'"
+                        # 'o' abre el historial, ENTER retoma la orden y ahi la 's' es
+                        # SIGUIENTE SIERRA. La 'o' sola no cambia de sierra.
+                        estado.mensaje = ("SIERRA COMPLETA - para la que sigue: "
+                                          "'o', ENTER y 's'")
                     else:
                         sierra = orden.sierra()
                         estado.mensaje = (
@@ -1880,10 +2433,15 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                             f"{sierra.dientes if sierra else '?'}: "
                             f"{anotado.estado or 'sin decidir'}"
                         )
+                        if falta_prueba:
+                            estado.mensaje += " - SIN FOTO DE PRUEBA"
                 expira_mensaje = time.monotonic() + _SEGUNDOS_MENSAJE
                 continue
 
-            if accion in ("conceptos", "orden"):
+            # "ordenes" es el boton nuevo de la barra de abajo y la tecla 'o'; "orden" se
+            # deja aceptado porque es el nombre que tenia la accion hasta ahora y hace lo
+            # mismo: las dos abren el historial.
+            if accion in ("conceptos", "orden", "ordenes"):
                 pan = panel.EstadoPanel(
                     conceptos=_lista_para_panel(conceptos, galeria),
                     pendiente=a_mostrar.copy(),
@@ -1894,12 +2452,27 @@ def _ejecutar_revision(cfg: AppConfig, args: argparse.Namespace) -> int:
                     recortada=(
                         memoria.autoevaluacion().recortada if memoria is not None else False
                     ),
+                    # El mismo minimo con el que la memoria decide: esta pantalla es donde
+                    # el operario ve cual concepto todavia no llega y cuantas fotos le
+                    # faltan. Ver panel._texto_aciertos().
+                    minimo_fotos=cfg.memoria.minimo_por_concepto,
                     orden=ordenes.abierta,
+                    # LAS FILAS QUE VAN A ENTRAR, medidas antes de abrir el panel: el
+                    # historial se dibuja al alto del lienzo del taller, que es el que se
+                    # acaba de usar, y sin esto el PRIMER cuadro del historial paginaba con
+                    # el tope de 8 mientras dibujaba 7 filas. Despues lo mantiene al dia
+                    # _dibujar_ordenes, que es el que dibuja de verdad.
+                    filas_por_pagina=panel.filas_de_ordenes(alto_lienzo),
                 )
                 automatica.reiniciar()
-                if accion == "orden":
-                    pan.modo = panel.MODO_ORDEN
-                    pan.cargando_orden = ordenes.abierta is None
+                if accion in ("orden", "ordenes"):
+                    # LA 'o' Y EL BOTON ORDENES ABREN EL HISTORIAL, no el formulario. Antes
+                    # caia derecho en "orden nueva" cuando no habia ninguna abierta, asi que
+                    # las ordenes ya guardadas no se podian mirar desde el programa: para la
+                    # orden de la semana pasada --la del reclamo que entra por telefono--
+                    # habia que abrir el Explorador. De aca se entra a una con ENTER o se
+                    # carga una nueva con 'n'.
+                    _abrir_historial(pan, ordenes)
                 continue
 
             if accion == "revisar":

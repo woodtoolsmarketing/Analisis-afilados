@@ -184,7 +184,27 @@ interfaz:
   # Cuantas evaluaciones seguidas tienen que dar lo mismo antes de cambiar el cartel. Con 1
   # el veredicto parpadea con cada temblor de la mano, y un cartel que parpadea es un cartel
   # que el operario deja de mirar.
+  #
+  # ESTE FRENO ES DEL MODELO ENTRENADO, NO DE LA MEMORIA. Vive adentro de la rama del
+  # clasificador (run_live.py), asi que mientras no haya un .onnx en models/ --que es como
+  # esta el taller hoy-- el cartel de la memoria puede cambiar en cada analisis.
   frames_para_confirmar: 3
+  # LA CAPTURA AUTOMATICA, que es lo que anota los dientes solo cuando hay una orden
+  # abierta. Estaban nada mas en el codigo y el README mandaba a tocarlas aca, asi que se
+  # escriben con sus valores de siempre: cambiarlas no cambia nada hasta que se las toque.
+  #
+  # Cada cuantos segundos mira un cuadro. 0.2 son cinco por segundo. Con 0 se apaga la
+  # captura automatica y los dientes se anotan a mano con la tecla 'g'.
+  # Medido: con 1.0 el operario tenia que sostener la sierra quieta cinco segundos por
+  # diente --casi siete minutos en una sierra de 80-- y el registro del taller mostro una
+  # orden de seis minutos con los siete dientes anotados a mano y ninguno solo.
+  segundos_entre_fotos: 0.2
+  # Cuantas fotos seguidas tienen que dar lo mismo para anotar el diente. Una sola puede
+  # agarrar el momento en que la pieza se acomoda, un reflejo o la mano cruzando.
+  # Medido con la sierra en la mano: a 1,0 s de apoyo se anotan 8 de 15 dientes y a 1,2 s
+  # se anotan 14 de 15. Despues de anotar hay que MOVER la pieza para que cuente la
+  # siguiente, que es lo que evita que una sierra olvidada sobre la mesa llene el informe.
+  fotos_iguales_para_anotar: 5
   # OBSOLETO, se deja para que un config viejo no reviente al abrir. Era la meta de
   # fotos por clase --"aprobada 12/50"-- que la pantalla mostraba abajo del cartel.
   #
@@ -272,6 +292,17 @@ memoria:
   #
   # NO es un numero medido. Mientras no se llegue, la pantalla sigue mostrando el parecido
   # contra la foto de modelo, que es el modo anterior.
+  #
+  # Y UN CONCEPTO QUE NO LLEGA A ESTE NUMERO NO PUEDE SER UN VEREDICTO. Antes se le exigia
+  # el minimo al conjunto --"que haya dos conceptos con 3 fotos"-- pero despues competian
+  # todos: un concepto de 2 fotos podia ganar la votacion y ser el veredicto, y sus fotos
+  # entraban en la cuenta de confianza. El 16/11/2026 eso freno el taller entero: con 15
+  # fotos en 4 conceptos, dos de ellos con 2 fotos, el programa dijo NO ESTOY SEGURO en
+  # TODOS los dientes del dia. Diente_sin_placa, con 2 fotos, acertaba 0 de 2 y esos dos
+  # errores dejaban la confianza en 62%, abajo del 70% de aca abajo.
+  # Ahora, si lo que mas se parece es un concepto al que le faltan fotos, el cartel dice
+  # FALTAN FOTOS y nombra cual y cuantas: no inventa un veredicto con el segundo ni se
+  # queda callado. La pantalla de CONCEPTOS tambien lo dice en la fila de cada uno.
   minimo_por_concepto: 3
   # Por debajo de este parecido la memoria dice "esto no se parece a nada de lo que tengo"
   # en vez de forzar un concepto. Medido sobre las fotos de microscopio: entre fotos
@@ -284,6 +315,15 @@ memoria:
   # El numero contra el que se compara no es inventado: sale de esconder cada foto
   # guardada y ver si las demas la ubican bien. Bajarlo hace que opine mas seguido y se
   # equivoque mas seguido.
+  #
+  # CON POCAS FOTOS NO SE COMPARA CONTRA UNA BANDA, SINO CONTRA EL ACIERTO GLOBAL, y la
+  # pantalla dice cual de los dos esta mostrando. "Decisiones asi de ajustadas" son el 25%
+  # de los casos mas cercanos, con un piso de 8 para que el porcentaje no salga de dos o
+  # tres casos; mientras ese piso mande y la ventana pase de la mitad de la memoria, no es
+  # una banda alrededor de este margen: es casi toda la memoria con otro nombre. Medido el
+  # 16/11/2026 con las 15 fotos del taller: la ventana eran 8 casos --el 53%-- con
+  # margenes de 1,8 a 17,9 puntos, y daba el MISMO 62% para cualquier margen por debajo de
+  # 11 puntos. El cartel decia "en decisiones asi de ajustadas" un numero que no media eso.
   confianza_minima: 0.70
   # Cuantas fotos de cada concepto pasan a la comparacion cara (la que alinea las dos
   # imagenes). El resto se descarta con una cuenta barata que cuesta 0.1 microsegundos por
@@ -306,8 +346,13 @@ memoria:
   # una sola foto afortunada, o mal archivada, decide sola.
   vecinos_por_concepto: 3
   # La autoevaluacion compara todas contra todas, asi que crece al cuadrado. Pasado este
-  # numero se mide sobre las mas nuevas y la pantalla lo dice ("acierta 97 de las ultimas
-  # 120"). Con 0 se mide siempre sobre todas, cueste lo que cueste.
+  # numero se mide sobre las FOTOS mas nuevas y la pantalla lo dice ("acierta 97 de las
+  # ultimas 110 veces que decidio"). Con 0 se mide siempre sobre todas, cueste lo que
+  # cueste.
+  # OJO CON LOS DOS NUMEROS: este tope cuenta FOTOS y el de la pantalla cuenta DECISIONES,
+  # y no son el mismo. Sobre una foto de un concepto al que le faltan fotos el programa no
+  # decide --dice FALTAN FOTOS-- asi que esa foto se mide y no suma decision. Medido el
+  # 16/11/2026 con la coleccion del taller: 15 fotos, 13 decisiones.
   maximo_autoevaluacion: 120
 
 detector:
